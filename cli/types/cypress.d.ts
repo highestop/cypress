@@ -2461,7 +2461,7 @@ declare namespace Cypress {
     }).then(result => {})
     ```
      */
-    wrap<F extends Promise<S>, S>(promise: F, options?: Partial<Loggable & Timeoutable>): Chainable<S>
+    wrap<F extends Promise<any>>(promise: F, options?: Partial<Loggable & Timeoutable>): Chainable<F extends Promise<infer S> ? S : unknown>
     /**
      * Yields whatever is passed into `.wrap()` to the next command in the Cypress chain.
      *
