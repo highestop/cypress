@@ -12,7 +12,7 @@ describe('SelectorPlayground', () => {
     return {
       autIframe,
       element: cy.mount(() => (
-        <div class="py-64px">
+        <div class="py-[64px]">
           <SelectorPlayground
             eventManager={eventManager}
             getAutIframe={() => autIframe}
@@ -28,8 +28,6 @@ describe('SelectorPlayground', () => {
     cy.spy(autIframe, 'toggleSelectorHighlight')
     cy.get('[data-cy="selected-playground-method"]').should('contain', 'cy.get')
     cy.get('[data-cy="playground-selector"]').should('have.value', 'body')
-
-    cy.percySnapshot()
   })
 
   it('toggles enabled', () => {
