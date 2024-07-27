@@ -1,5 +1,5 @@
 const { assertLogLength } = require('../../support/utils')
-const { _, Promise } = Cypress
+const { Promise } = Cypress
 
 describe('src/cy/commands/task', () => {
   context('#task', {
@@ -63,13 +63,31 @@ describe('src/cy/commands/task', () => {
         return null
       })
 
-      it('can turn off logging', () => {
-        cy.task('foo', null, { log: false }).then(function () {
-          const logs = _.filter(this.logs, (log) => {
-            return log.get('name') === 'task'
-          })
+      it('can turn off logging when protocol is disabled', { protocolEnabled: false }, function () {
+        cy.on('_log:added', (attrs, log) => {
+          this.hiddenLog = log
+        })
 
-          expect(logs.length).to.eq(0)
+        cy.task('foo', null, { log: false }).then(function () {
+          const { lastLog, hiddenLog } = this
+
+          expect(lastLog).to.be.undefined
+          expect(hiddenLog).to.be.undefined
+        })
+      })
+
+      it('can send hidden log when protocol is enabled', { protocolEnabled: true }, function () {
+        cy.on('_log:added', (attrs, log) => {
+          this.hiddenLog = log
+        })
+
+        cy.task('foo', null, { log: false }).then(function () {
+          const { lastLog, hiddenLog } = this
+
+          expect(lastLog).to.be.undefined
+          expect(hiddenLog.get('name'), 'log name').to.eq('task')
+          expect(hiddenLog.get('hidden'), 'log hidden').to.be.true
+          expect(hiddenLog.get('snapshots').length, 'log snapshot length').to.eq(1)
         })
       })
 
@@ -190,7 +208,7 @@ describe('src/cy/commands/task', () => {
       })
 
       it('throws when the task errors', function (done) {
-        Cypress.backend.rejects(new Error('task failed'))
+        Cypress.backend.withArgs('run:privileged').rejects(new Error('task failed'))
 
         cy.on('fail', (err) => {
           const { lastLog } = this
@@ -216,7 +234,7 @@ describe('src/cy/commands/task', () => {
           expect(lastLog.get('error')).to.eq(err)
           expect(lastLog.get('state')).to.eq('failed')
 
-          expect(err.message).to.eq(`\`cy.task('bar')\` failed with the following error:\n\nThe task 'bar' was not handled in the setupNodeEvents method. The following tasks are registered: return:arg, return:foo, return:bar, return:baz, cypress:env, arg:is:undefined, wait, create:long:file, check:screenshot:size\n\nFix this in your setupNodeEvents method here:\n${Cypress.config('configFile')}`)
+          expect(err.message).to.eq(`\`cy.task('bar')\` failed with the following error:\n\nThe task 'bar' was not handled in the setupNodeEvents method. The following tasks are registered: log, return:arg, return:foo, return:bar, return:baz, cypress:env, arg:is:undefined, wait, create:long:file, check:screenshot:size\n\nFix this in your setupNodeEvents method here:\n${Cypress.config('configFile')}`)
 
           done()
         })
@@ -225,7 +243,7 @@ describe('src/cy/commands/task', () => {
       })
 
       it('throws after timing out', function (done) {
-        Cypress.backend.resolves(Promise.delay(250))
+        Cypress.backend.withArgs('run:privileged').resolves(Promise.delay(250))
 
         cy.on('fail', (err) => {
           const { lastLog } = this
@@ -243,7 +261,7 @@ describe('src/cy/commands/task', () => {
       })
 
       it('logs once on error', function (done) {
-        Cypress.backend.rejects(new Error('task failed'))
+        Cypress.backend.withArgs('run:privileged').rejects(new Error('task failed'))
 
         cy.on('fail', (err) => {
           const { lastLog } = this
@@ -263,7 +281,7 @@ describe('src/cy/commands/task', () => {
 
         err.timedOut = true
 
-        Cypress.backend.rejects(err)
+        Cypress.backend.withArgs('run:privileged').rejects(err)
 
         cy.on('fail', (err) => {
           expect(err.message).to.include('`cy.task(\'wait\')` timed out after waiting `100ms`.')

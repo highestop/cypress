@@ -1,6 +1,5 @@
 const { assertLogLength } = require('../../support/utils')
 const { stripIndent } = require('common-tags')
-const { _ } = Cypress
 
 const okResponse = {
   contents: 'contents',
@@ -14,6 +13,14 @@ describe('src/cy/commands/files', () => {
   })
 
   describe('#readFile', () => {
+    it('really works', () => {
+      cy.readFile('./cypress/fixtures/fileSpec.json').its('baseUrl').should('eq', 'http://localhost:3500')
+    })
+
+    it('works when contents are supposed to be null', () => {
+      cy.readFile('does-not-exist').should('be.null')
+    })
+
     it('sends privileged readFile to backend with the right options', () => {
       Cypress.backend.resolves(okResponse)
 
@@ -91,14 +98,14 @@ describe('src/cy/commands/files', () => {
         retries += 1
       })
 
-      Cypress.backend
+      Cypress.backend.withArgs('run:privileged')
       .onFirstCall()
       .rejects(err)
       .onSecondCall()
       .resolves(okResponse)
 
       cy.readFile('foo.json').then(() => {
-        expect(retries).to.eq(1)
+        expect(retries).to.eq(2)
       })
     })
 
@@ -109,7 +116,7 @@ describe('src/cy/commands/files', () => {
         retries += 1
       })
 
-      Cypress.backend
+      Cypress.backend.withArgs('run:privileged')
       .onFirstCall()
       .resolves({
         contents: 'foobarbaz',
@@ -120,16 +127,10 @@ describe('src/cy/commands/files', () => {
       })
 
       cy.readFile('foo.json').should('eq', 'quux').then(() => {
-        expect(retries).to.eq(1)
+        // Two retries: The first one triggers a backend request and throws a 'not ready' error.
+        // The second gets foobarbaz, triggering another request to the backend.
+        expect(retries).to.eq(2)
       })
-    })
-
-    it('really works', () => {
-      cy.readFile('./cypress/fixtures/fileSpec.json').its('baseUrl').should('eq', 'http://localhost:3500')
-    })
-
-    it('works when contents are supposed to be null', () => {
-      cy.readFile('does-not-exist').should('be.null')
     })
 
     describe('.log', () => {
@@ -140,19 +141,37 @@ describe('src/cy/commands/files', () => {
           this.lastLog = log
           this.logs.push(log)
         })
-
-        return null
       })
 
-      it('can turn off logging', () => {
+      it('can turn off logging when protocol is disabled', { protocolEnabled: false }, function () {
+        cy.on('_log:added', (attrs, log) => {
+          this.hiddenLog = log
+        })
+
         Cypress.backend.resolves(okResponse)
 
         cy.readFile('foo.json', { log: false }).then(function () {
-          const logs = _.filter(this.logs, (log) => {
-            return log.get('name') === 'readFile'
-          })
+          const { lastLog, hiddenLog } = this
 
-          expect(logs.length).to.eq(0)
+          expect(lastLog).to.be.undefined
+          expect(hiddenLog).to.be.undefined
+        })
+      })
+
+      it('can send hidden log when protocol is enabled', { protocolEnabled: true }, function () {
+        cy.on('_log:added', (attrs, log) => {
+          this.hiddenLog = log
+        })
+
+        Cypress.backend.resolves(okResponse)
+
+        cy.readFile('foo.json', { log: false }).then(function () {
+          const { lastLog, hiddenLog } = this
+
+          expect(lastLog).to.be.undefined
+          expect(hiddenLog.get('name'), 'log name').to.eq('readFile')
+          expect(hiddenLog.get('hidden'), 'log hidden').to.be.true
+          expect(hiddenLog.get('snapshots').length, 'log snapshot length').to.eq(1)
         })
       })
 
@@ -193,10 +212,6 @@ describe('src/cy/commands/files', () => {
         })
 
         this.logs = []
-
-        cy.on('fail', () => {
-          cy.off('log:added', collectLogs)
-        })
 
         return null
       })
@@ -256,12 +271,12 @@ describe('src/cy/commands/files', () => {
         err.code = 'EISDIR'
         err.filePath = '/path/to/foo'
 
-        Cypress.backend.rejects(err)
+        Cypress.backend.withArgs('run:privileged').rejects(err)
 
         cy.on('fail', (err) => {
           const { fileLog } = this
 
-          assertLogLength(this.logs, 1)
+          assertLogLength(this.logs, 2)
           expect(fileLog.get('error')).to.eq(err)
           expect(fileLog.get('state')).to.eq('failed')
           expect(err.message).to.eq(stripIndent`\
@@ -288,7 +303,7 @@ describe('src/cy/commands/files', () => {
         err.code = 'ENOENT'
         err.filePath = '/path/to/foo.json'
 
-        Cypress.backend.rejects(err)
+        Cypress.backend.withArgs('run:privileged').rejects(err)
 
         cy.on('fail', (err) => {
           const { fileLog } = this
@@ -317,7 +332,7 @@ describe('src/cy/commands/files', () => {
         err.code = 'ENOENT'
         err.filePath = '/path/to/foo.json'
 
-        Cypress.backend.rejects(err)
+        Cypress.backend.withArgs('run:privileged').rejects(err)
         let hasRetried = false
 
         cy.on('command:retry', () => {
@@ -396,7 +411,7 @@ describe('src/cy/commands/files', () => {
       })
 
       it('throws when the read timeout expires', function (done) {
-        Cypress.backend.callsFake(() => {
+        Cypress.backend.withArgs('run:privileged').callsFake(() => {
           return new Cypress.Promise(() => { /* Broken promise for timeout */ })
         })
 
@@ -406,7 +421,7 @@ describe('src/cy/commands/files', () => {
           expect(fileLog.get('error')).to.eq(err)
           expect(fileLog.get('state')).to.eq('failed')
           expect(err.message).to.eq(stripIndent`\
-            \`cy.readFile("foo")\` timed out after waiting \`10ms\`.
+            Timed out retrying after 10ms: \`cy.readFile("foo")\` timed out.
           `)
 
           expect(err.docsUrl).to.eq('https://on.cypress.io/readfile')
@@ -420,7 +435,7 @@ describe('src/cy/commands/files', () => {
       it('uses defaultCommandTimeout config value if option not provided', {
         defaultCommandTimeout: 42,
       }, function (done) {
-        Cypress.backend.callsFake(() => {
+        Cypress.backend.withArgs('run:privileged').callsFake(() => {
           return new Cypress.Promise(() => { /* Broken promise for timeout */ })
         })
 
@@ -430,7 +445,7 @@ describe('src/cy/commands/files', () => {
           expect(fileLog.get('error')).to.eq(err)
           expect(fileLog.get('state')).to.eq('failed')
           expect(err.message).to.eq(stripIndent`\
-            \`cy.readFile("foo")\` timed out after waiting \`42ms\`.
+            Timed out retrying after 42ms: \`cy.readFile("foo")\` timed out.
           `)
 
           expect(err.docsUrl).to.eq('https://on.cypress.io/readfile')
@@ -599,19 +614,37 @@ describe('src/cy/commands/files', () => {
           this.lastLog = log
           this.logs.push(log)
         })
-
-        return null
       })
 
-      it('can turn off logging', () => {
+      it('can turn off logging when protocol is disabled', { protocolEnabled: false }, function () {
+        cy.on('_log:added', (attrs, log) => {
+          this.hiddenLog = log
+        })
+
         Cypress.backend.resolves(okResponse)
 
         cy.writeFile('foo.txt', 'contents', { log: false }).then(function () {
-          const logs = _.filter(this.logs, (log) => {
-            return log.get('name') === 'writeFile'
-          })
+          const { lastLog, hiddenLog } = this
 
-          expect(logs.length).to.eq(0)
+          expect(lastLog).to.be.undefined
+          expect(hiddenLog).to.be.undefined
+        })
+      })
+
+      it('can send hidden log when protocol is enabled', { protocolEnabled: true }, function () {
+        cy.on('_log:added', (attrs, log) => {
+          this.hiddenLog = log
+        })
+
+        Cypress.backend.resolves(okResponse)
+
+        cy.writeFile('foo.txt', 'contents', { log: false }).then(function () {
+          const { lastLog, hiddenLog } = this
+
+          expect(lastLog).to.be.undefined
+          expect(hiddenLog.get('name'), 'log name').to.eq('writeFile')
+          expect(hiddenLog.get('hidden'), 'log hidden').to.be.true
+          expect(hiddenLog.get('snapshots').length, 'log snapshot length').to.eq(1)
         })
       })
 
@@ -719,7 +752,7 @@ describe('src/cy/commands/files', () => {
         err.code = 'WHOKNOWS'
         err.filePath = '/path/to/foo.txt'
 
-        Cypress.backend.rejects(err)
+        Cypress.backend.withArgs('run:privileged').rejects(err)
 
         cy.on('fail', (err) => {
           const { lastLog } = this
@@ -745,7 +778,7 @@ describe('src/cy/commands/files', () => {
       })
 
       it('throws when the write timeout expires', function (done) {
-        Cypress.backend.callsFake(() => {
+        Cypress.backend.withArgs('run:privileged').callsFake(() => {
           return new Cypress.Promise(() => {})
         })
 
@@ -770,7 +803,7 @@ describe('src/cy/commands/files', () => {
       it('uses defaultCommandTimeout config value if option not provided', {
         defaultCommandTimeout: 42,
       }, function (done) {
-        Cypress.backend.callsFake(() => {
+        Cypress.backend.withArgs('run:privileged').callsFake(() => {
           return new Cypress.Promise(() => { /* Broken promise for timeout */ })
         })
 

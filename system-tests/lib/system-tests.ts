@@ -3,6 +3,7 @@ const snapshot = require('snap-shot-it')
 import type { SpawnOptions, ChildProcess } from 'child_process'
 import stream from 'stream'
 import { expect } from './spec_helper'
+import stripAnsi from 'strip-ansi'
 import { dockerSpawner } from './docker'
 import Express from 'express'
 import Fixtures from './fixtures'
@@ -142,9 +143,17 @@ type ExecOptions = {
    */
   snapshot?: boolean
   /**
+   * By default strip ansi codes from stdout/stderr. Pass false to turn off.
+   */
+  stripAnsi?: boolean
+  /**
    * Pass a function to assert on and/or modify the stdout before snapshotting.
    */
   onStdout?: (stdout: string) => string | void
+  /**
+   * Pass a function to assert on and/or modify the stderr.
+   */
+  onStderr?: (stderr: string) => string | void
   /**
    * Pass a function to receive the spawned process as an argument.
    */
@@ -629,12 +638,13 @@ const systemTests = {
     }
 
     _.defaults(options, {
-      browser: 'electron',
+      browser: process.env.SNAPSHOT_BROWSER || 'electron',
       headed: process.env.HEADED || false,
       project: 'e2e',
-      timeout: 120000,
+      timeout: Number(process.env.SYSTEM_TEST_TIMEOUT || 120000),
       originalTitle: null,
       expectedExitCode: 0,
+      stripAnsi: true,
       sanitizeScreenshotDimensions: false,
       normalizeStdoutAvailableBrowsers: true,
       noExit: process.env.NO_EXIT,
@@ -803,24 +813,23 @@ const systemTests = {
     debug('systemTests.exec options %o', options)
     options = this.options(ctx, options)
 
-    // Force the default to have compression off
-    if (!options.config) {
-      options.config = {
-        videoCompression: false,
-      }
-    } else if (!options.config.videoCompression) {
-      options.config.videoCompression = false
-    }
-
     debug('processed options %o', options)
     const args = options.args || this.args(options)
 
     const specifiedBrowser = process.env.BROWSER
     const projectPath = Fixtures.projectPath(options.project)
 
+    if (process.env.SNAPSHOT_BROWSER) {
+      debug('setting browser to ', process.env.SNAPSHOT_BROWSER)
+      options.browser = options.browser || process.env.SNAPSHOT_BROWSER as BrowserName
+      debug(options.browser)
+    }
+
     if (specifiedBrowser && (![].concat(options.browser).includes(specifiedBrowser))) {
       ctx.skip()
     }
+
+    debug(process.env.SNAPSHOT_BROWSER, options.browser)
 
     if (!options.skipScaffold) {
       // symlinks won't work via docker
@@ -851,19 +860,31 @@ const systemTests = {
         }
       })
 
+      if (options.stripAnsi) {
+        // always strip ansi from stdout/stderr before yielding
+        // it to any callback functions
+        stdout = stripAnsi(stdout)
+        stderr = stripAnsi(stderr)
+      }
+
+      if (options.onStdout) {
+        const newStdout = options.onStdout(stdout)
+
+        if (newStdout && _.isString(newStdout)) {
+          stdout = newStdout
+        }
+      }
+
+      if (options.onStderr) {
+        const newStderr = options.onStderr(stderr)
+
+        if (newStderr && _.isString(newStderr)) {
+          stderr = newStderr
+        }
+      }
+
       // snapshot the stdout!
       if (options.snapshot) {
-        // enable callback to modify stdout
-        const ostd = options.onStdout
-
-        if (ostd) {
-          const newStdout = ostd(stdout)
-
-          if (newStdout && _.isString(newStdout)) {
-            stdout = newStdout
-          }
-        }
-
         // if we have browser in the stdout make
         // sure its legit
         const matches = browserNameVersionRe.exec(stdout)
@@ -1014,8 +1035,8 @@ const systemTests = {
     return stdout
     .replace(/using description file: .* \(relative/g, 'using description file: [..] (relative')
     .replace(/Module build failed \(from .*\)/g, 'Module build failed (from [..])')
-    .replace(/Project is running at http:\/\/localhost:\d+/g, 'Project is running at http://localhost:xxxx')
     .replace(/webpack.*compiled with.*in \d+ ms/g, 'webpack x.x.x compiled with x errors in xxx ms')
+    .replace(/webpack.*compiled successfully in \d+ ms/g, 'webpack x.x.x compiled successfully in xxx ms')
   },
 
   normalizeRuns (runs) {

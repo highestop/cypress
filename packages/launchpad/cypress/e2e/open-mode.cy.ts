@@ -62,7 +62,7 @@ describe('Launchpad: Open Mode', () => {
       })
 
       cy.withCtx((ctx, o) => {
-        ctx.localSettingsApi.setPreferences({
+        ctx.config.localSettingsApi.setPreferences({
           notifyWhenRunCompletes: ['failed'],
         })
       })
@@ -85,7 +85,7 @@ describe('Launchpad: Open Mode', () => {
             'x-framework': 'react',
             'x-dev-server': 'webpack',
             'x-notifications': 'failed',
-            'x-dependencies': 'typescript@4.7.4',
+            'x-dependencies': 'typescript@5.3.3',
           },
         })
       })

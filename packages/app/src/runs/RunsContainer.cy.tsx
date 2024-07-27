@@ -16,15 +16,16 @@ describe('<RunsContainer />', { keystrokeDelay: 0 }, () => {
       cy.mountFragment(RunsContainerFragmentDoc, {
         render (gqlVal) {
           const runs = gqlVal.currentProject?.cloudProject?.__typename === 'CloudProject' ? gqlVal.currentProject.cloudProject.runs?.nodes : undefined
+          const runIds: string[] = runs?.[0]?.id ? [runs?.[0]?.id] : [] as string[]
 
-          return <RunsContainer gql={gqlVal} runs={runs} online />
+          return <RunsContainer gql={gqlVal} runs={runs} online allRunIds={runIds} />
         },
       })
 
       const statuses = ['CANCELLED', 'ERRORED', 'FAILED', 'NOTESTS', 'OVERLIMIT', 'PASSED', 'RUNNING', 'TIMEDOUT']
 
       cy.wrap(statuses).each((status: string) => {
-        cy.contains(`fix: make gql work ${ status}`).should('be.visible')
+        cy.get(`[data-cy="runCard-status-${status}"]`).should('exist')
       })
 
       cy.percySnapshot()
@@ -126,7 +127,7 @@ describe('<RunsContainer />', { keystrokeDelay: 0 }, () => {
         },
       })
 
-      cy.get('h3').contains(defaultMessages.runs.empty.gitRepositoryNotDetected)
+      cy.get('h2').contains(defaultMessages.runs.empty.gitRepositoryNotDetected)
       cy.contains(defaultMessages.runs.empty.ensureGitSetupCorrectly)
     })
 
@@ -145,7 +146,7 @@ describe('<RunsContainer />', { keystrokeDelay: 0 }, () => {
         },
       })
 
-      cy.get('h3').contains(defaultMessages.runs.empty.gitRepositoryNotDetected)
+      cy.get('h2').contains(defaultMessages.runs.empty.gitRepositoryNotDetected)
       cy.contains(defaultMessages.runs.empty.ensureGitSetupCorrectly)
       cy.get('[data-cy=alert-suffix-icon]').click()
       cy.get('[data-cy=alert-header]').should('not.exist')
@@ -174,7 +175,7 @@ describe('<RunsContainer />', { keystrokeDelay: 0 }, () => {
         },
       })
 
-      cy.get('h3').contains(defaultMessages.runs.empty.noRunsFoundForBranch)
+      cy.get('h2').contains(defaultMessages.runs.empty.noRunsFoundForBranch)
       cy.get('p').contains(defaultMessages.runs.empty.noRunsForBranchMessage)
       // The utm_source will be Binary%3A+App in production`open` mode but we assert using Binary%3A+Launchpad as this is the value in CI
       cy.contains(defaultMessages.links.learnMoreButton).should('have.attr', 'href', 'https://on.cypress.io/git-info?utm_source=Binary%3A+Launchpad&utm_medium=Runs+Tab&utm_campaign=No+Runs+Found')
@@ -201,7 +202,7 @@ describe('<RunsContainer />', { keystrokeDelay: 0 }, () => {
         },
       })
 
-      cy.get('h3').contains(defaultMessages.runs.empty.noRunsFoundForBranch)
+      cy.get('h2').contains(defaultMessages.runs.empty.noRunsFoundForBranch)
       cy.get('p').contains(defaultMessages.runs.empty.noRunsForBranchMessage)
       // The utm_source will be Binary%3A+App in production`open` mode but we assert using Binary%3A+Launchpad as this is the value in CI
       cy.contains(defaultMessages.links.learnMoreButton).should('have.attr', 'href', 'https://on.cypress.io/git-info?utm_source=Binary%3A+Launchpad&utm_medium=Runs+Tab&utm_campaign=No+Runs+Found')

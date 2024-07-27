@@ -6,14 +6,12 @@
   "main": "dist/mksnapshot.js",
   "scripts": {
     "build": "tsc",
-    "build-prod": "yarn build",
-    "check-ts": "tsc --noEmit && yarn -s tslint",
-    "clean-deps": "rimraf node_modules",
+    "check-ts": "tsc --noEmit",
     "clean": "rimraf dist",
+    "clean-deps": "rimraf node_modules",
     "test": "yarn test-unit",
-    "test-unit": "mocha test/unit/**/*.spec.ts --config ./test/.mocharc.js",
     "test-integration": "mocha test/integration/**/*.spec.ts --config ./test/.mocharc.js",
-    "tslint": "tslint --config ../ts/tslint.json --project .",
+    "test-unit": "mocha test/unit/**/*.spec.ts --config ./test/.mocharc.js",
     "watch": "tsc --watch"
   },
   "dependencies": {

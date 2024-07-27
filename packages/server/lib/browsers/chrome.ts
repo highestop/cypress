@@ -15,12 +15,15 @@ import { CdpAutomation, screencastOpts } from './cdp_automation'
 import * as protocol from './protocol'
 import utils from './utils'
 import * as errors from '../errors'
-import type { Browser, BrowserInstance } from './types'
 import { BrowserCriClient } from './browser-cri-client'
+import type { Browser, BrowserInstance, GracefulShutdownOptions } from './types'
 import type { CriClient } from './cri-client'
 import type { Automation } from '../automation'
-import type { BrowserLaunchOpts, BrowserNewTabOpts, RunModeVideoApi } from '@packages/types'
 import memory from './memory'
+
+import type { BrowserLaunchOpts, BrowserNewTabOpts, ProtocolManagerShape, RunModeVideoApi } from '@packages/types'
+import type { CDPSocketServer } from '@packages/socket/lib/cdp-socket'
+import { DEFAULT_CHROME_FLAGS } from '../util/chromium_flags'
 
 const debug = debugModule('cypress:server:browsers:chrome')
 
@@ -42,88 +45,8 @@ type ChromePreferences = {
   localState: object
 }
 
-const pathToExtension = extension.getPathToExtension()
+const pathToExtension = extension.getPathToV3Extension()
 const pathToTheme = extension.getPathToTheme()
-
-// Common Chrome Flags for Automation
-// https://github.com/GoogleChrome/chrome-launcher/blob/master/docs/chrome-flags-for-tools.md
-const DEFAULT_ARGS = [
-  '--test-type',
-  '--ignore-certificate-errors',
-  '--start-maximized',
-  '--silent-debugger-extension-api',
-  '--no-default-browser-check',
-  '--no-first-run',
-  '--noerrdialogs',
-  '--enable-fixed-layout',
-  '--disable-popup-blocking',
-  '--disable-password-generation',
-  '--disable-single-click-autofill',
-  '--disable-prompt-on-repos',
-  '--disable-background-timer-throttling',
-  '--disable-renderer-backgrounding',
-  '--disable-renderer-throttling',
-  '--disable-backgrounding-occluded-windows',
-  '--disable-restore-session-state',
-  '--disable-new-profile-management',
-  '--disable-new-avatar-menu',
-  '--allow-insecure-localhost',
-  '--reduce-security-for-testing',
-  '--enable-automation',
-  '--disable-print-preview',
-
-  '--disable-device-discovery-notifications',
-
-  // https://github.com/cypress-io/cypress/issues/2376
-  '--autoplay-policy=no-user-gesture-required',
-
-  // http://www.chromium.org/Home/chromium-security/site-isolation
-  // https://github.com/cypress-io/cypress/issues/1951
-  '--disable-site-isolation-trials',
-
-  // the following come frome chromedriver
-  // https://code.google.com/p/chromium/codesearch#chromium/src/chrome/test/chromedriver/chrome_launcher.cc&sq=package:chromium&l=70
-  '--metrics-recording-only',
-  '--disable-prompt-on-repost',
-  '--disable-hang-monitor',
-  '--disable-sync',
-  // this flag is causing throttling of XHR callbacks for
-  // as much as 30 seconds. If you VNC in and open dev tools or
-  // click on a button, it'll "instantly" work. with this
-  // option enabled, it will time out some of our tests in circle
-  // "--disable-background-networking"
-  '--disable-web-resources',
-  '--safebrowsing-disable-download-protection',
-  '--disable-client-side-phishing-detection',
-  '--disable-component-update',
-  // Simulate when chrome needs an update.
-  // This prevents an 'update' from displaying til the given date
-  `--simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT'`,
-  '--disable-default-apps',
-
-  // These flags are for webcam/WebRTC testing
-  // https://github.com/cypress-io/cypress/issues/2704
-  '--use-fake-ui-for-media-stream',
-  '--use-fake-device-for-media-stream',
-
-  // so Cypress commands don't get throttled
-  // https://github.com/cypress-io/cypress/issues/5132
-  '--disable-ipc-flooding-protection',
-
-  // misc. options puppeteer passes
-  // https://github.com/cypress-io/cypress/issues/3633
-  '--disable-backgrounding-occluded-window',
-  '--disable-breakpad',
-  '--password-store=basic',
-  '--use-mock-keychain',
-
-  // write shared memory files into '/tmp' instead of '/dev/shm'
-  // https://github.com/cypress-io/cypress/issues/5336
-  '--disable-dev-shm-usage',
-
-  // enable precise memory info so performance.memory returns more accurate values
-  '--enable-precise-memory-info',
-]
 
 let browserCriClient: BrowserCriClient | undefined
 
@@ -132,6 +55,15 @@ let browserCriClient: BrowserCriClient | undefined
  * @param userDir
  */
 const _getChromePreferences = (userDir: string): Bluebird<ChromePreferences> => {
+  // skip reading the preferences if requested by the user,
+  // typically used when the AUT encrypts the user data dir, causing relaunches of the browser not to work
+  // see https://github.com/cypress-io/cypress/issues/29330
+  if (process.env.IGNORE_CHROME_PREFERENCES) {
+    debug('ignoring chrome preferences: not reading from chrome preference files')
+
+    return Bluebird.resolve(_.mapValues(CHROME_PREFERENCE_PATHS, () => ({})))
+  }
+
   debug('reading chrome preferences... %o', { userDir, CHROME_PREFERENCE_PATHS })
 
   return Bluebird.props(_.mapValues(CHROME_PREFERENCE_PATHS, (prefPath) => {
@@ -172,7 +104,16 @@ const _mergeChromePreferences = (originalPrefs: ChromePreferences, newPrefs: Chr
   })
 }
 
-const _writeChromePreferences = (userDir: string, originalPrefs: ChromePreferences, newPrefs: ChromePreferences) => {
+const _writeChromePreferences = (userDir: string, originalPrefs: ChromePreferences, newPrefs: ChromePreferences): Promise<void> => {
+  // skip writing the preferences if requested by the user,
+  // typically used when the AUT encrypts the user data dir, causing relaunches of the browser not to work
+  // see https://github.com/cypress-io/cypress/issues/29330
+  if (process.env.IGNORE_CHROME_PREFERENCES) {
+    debug('ignoring chrome preferences: not writing to preference files')
+
+    return Promise.resolve()
+  }
+
   return Bluebird.map(_.keys(originalPrefs), (key) => {
     const originalJson = originalPrefs[key]
     const newJson = newPrefs[key]
@@ -231,6 +172,10 @@ const _removeRootExtension = () => {
 
 // https://github.com/cypress-io/cypress/issues/2048
 const _disableRestorePagesPrompt = function (userDir) {
+  if (process.env.IGNORE_CHROME_PREFERENCES) {
+    return Promise.resolve()
+  }
+
   const prefsPath = path.join(userDir, 'Default', 'Preferences')
 
   return fs.readJson(prefsPath)
@@ -296,11 +241,17 @@ const _handleDownloads = async function (client, downloadsFolder: string, automa
   })
 
   client.on('Page.downloadProgress', (data) => {
-    if (data.state !== 'completed') return
+    if (data.state === 'completed') {
+      automation.push('complete:download', {
+        id: data.guid,
+      })
+    }
 
-    automation.push('complete:download', {
-      id: data.guid,
-    })
+    if (data.state === 'canceled') {
+      automation.push('canceled:download', {
+        id: data.guid,
+      })
+    }
   })
 
   await client.send('Page.setDownloadBehavior', {
@@ -312,7 +263,7 @@ const _handleDownloads = async function (client, downloadsFolder: string, automa
 let onReconnect: (client: CriClient) => Promise<void> = async () => undefined
 
 const _setAutomation = async (client: CriClient, automation: Automation, resetBrowserTargets: (shouldKeepTabOpen: boolean) => Promise<void>, options: BrowserLaunchOpts) => {
-  const cdpAutomation = await CdpAutomation.create(client.send, client.on, resetBrowserTargets, automation)
+  const cdpAutomation = await CdpAutomation.create(client.send, client.on, client.off, resetBrowserTargets, automation, options.protocolManager, true, options.isTextTerminal)
 
   automation.use(cdpAutomation)
 
@@ -355,21 +306,16 @@ export = {
       return
     }
 
-    // get the string bytes for the final extension file
-    const str = await extension.setHostAndPath(options.proxyUrl, options.socketIoRoute)
     const extensionDest = utils.getExtensionDir(browser, options.isTextTerminal)
-    const extensionBg = path.join(extensionDest, 'background.js')
 
     // copy the extension src to the extension dist
     await utils.copyExtension(pathToExtension, extensionDest)
-    await fs.chmod(extensionBg, 0o0644)
-    await fs.writeFileAsync(extensionBg, str)
 
     return extensionDest
   },
 
   _getArgs (browser: Browser, options: BrowserLaunchOpts, port: string) {
-    const args = ([] as string[]).concat(DEFAULT_ARGS)
+    const args = ([] as string[]).concat(DEFAULT_CHROME_FLAGS)
 
     if (os.platform() === 'linux') {
       args.push('--disable-gpu')
@@ -436,15 +382,22 @@ export = {
   /**
   * Clear instance state for the chrome instance, this is normally called in on kill or on exit.
   */
-  clearInstanceState () {
-    debug('closing remote interface client')
-
+  clearInstanceState (options: GracefulShutdownOptions = {}) {
+    debug('closing remote interface client', { options })
     // Do nothing on failure here since we're shutting down anyway
-    browserCriClient?.close().catch()
+    browserCriClient?.close(options.gracefulShutdown).catch(() => {})
     browserCriClient = undefined
   },
 
-  async connectToNewSpec (browser: Browser, options: BrowserNewTabOpts, automation: Automation) {
+  async connectProtocolToBrowser (options: { protocolManager?: ProtocolManagerShape }) {
+    const browserCriClient = this._getBrowserCriClient()
+
+    if (!browserCriClient?.currentlyAttachedTarget) throw new Error('Missing pageCriClient in connectProtocolToBrowser')
+
+    await options.protocolManager?.connectToBrowser(browserCriClient.currentlyAttachedTarget)
+  },
+
+  async connectToNewSpec (browser: Browser, options: BrowserNewTabOpts, automation: Automation, socketServer?: CDPSocketServer) {
     debug('connecting to new chrome tab in existing instance with url and debugging port', { url: options.url })
 
     const browserCriClient = this._getBrowserCriClient()
@@ -457,30 +410,47 @@ export = {
 
     if (!options.url) throw new Error('Missing url in connectToNewSpec')
 
-    await this.attachListeners(options.url, pageCriClient, automation, options)
+    await this.connectProtocolToBrowser({ protocolManager: options.protocolManager })
+    await socketServer?.attachCDPClient(pageCriClient)
+
+    await this.attachListeners(options.url, pageCriClient, automation, options, browser)
   },
 
-  async connectToExisting (browser: Browser, options: BrowserLaunchOpts, automation: Automation) {
+  async connectToExisting (browser: Browser, options: BrowserLaunchOpts, automation: Automation, cdpSocketServer?: CDPSocketServer) {
     const port = await protocol.getRemoteDebuggingPort()
 
     debug('connecting to existing chrome instance with url and debugging port', { url: options.url, port })
     if (!options.onError) throw new Error('Missing onError in connectToExisting')
 
-    const browserCriClient = await BrowserCriClient.create(['127.0.0.1'], port, browser.displayName, options.onError, onReconnect)
+    const browserCriClient = await BrowserCriClient.create({
+      hosts: ['127.0.0.1'],
+      port,
+      browserName: browser.displayName,
+      onAsynchronousError: options.onError,
+      onReconnect,
+      fullyManageTabs: false,
+      onServiceWorkerClientEvent: automation.onServiceWorkerClientEvent,
+    })
 
     if (!options.url) throw new Error('Missing url in connectToExisting')
 
     const pageCriClient = await browserCriClient.attachToTargetUrl(options.url)
 
+    await cdpSocketServer?.attachCDPClient(pageCriClient)
+
     await this._setAutomation(pageCriClient, automation, browserCriClient.resetBrowserTargets, options)
   },
 
-  async attachListeners (url: string, pageCriClient: CriClient, automation: Automation, options: BrowserLaunchOpts | BrowserNewTabOpts) {
+  async attachListeners (url: string, pageCriClient: CriClient, automation: Automation, options: BrowserLaunchOpts | BrowserNewTabOpts, browser: Browser) {
     const browserCriClient = this._getBrowserCriClient()
 
     // Handle chrome tab crashes.
-    pageCriClient.on('Inspector.targetCrashed', async () => {
-      const err = errors.get('RENDERER_CRASHED')
+    pageCriClient.on('Target.targetCrashed', async (event) => {
+      if (event.targetId !== browserCriClient?.currentlyAttachedTarget?.targetId) {
+        return
+      }
+
+      const err = errors.get('RENDERER_CRASHED', browser.displayName)
 
       await memory.endProfiling()
 
@@ -511,8 +481,10 @@ export = {
     await options['onInitializeNewBrowserTab']?.()
 
     await Promise.all([
+      pageCriClient.send('ServiceWorker.enable'),
       options.videoApi && this._recordVideo(cdpAutomation, options.videoApi, Number(options.browser.majorVersion)),
       this._handleDownloads(pageCriClient, options.downloadsFolder, automation),
+      utils.initializeCDP(pageCriClient, automation),
     ])
 
     await this._navigateUsingCRI(pageCriClient, url)
@@ -523,7 +495,7 @@ export = {
     return cdpAutomation
   },
 
-  async open (browser: Browser, url, options: BrowserLaunchOpts, automation: Automation): Promise<BrowserInstance> {
+  async open (browser: Browser, url, options: BrowserLaunchOpts, automation: Automation, cdpSocketServer?: CDPSocketServer): Promise<BrowserInstance> {
     const { isTextTerminal } = options
 
     const userDir = utils.getProfileDir(browser, isTextTerminal)
@@ -558,6 +530,8 @@ export = {
       ),
       _removeRootExtension(),
       _disableRestorePagesPrompt(userDir),
+      // Chrome adds a lock file to the user data dir. If we are restarting the run and browser, we need to remove it.
+      fs.unlink(path.join(userDir, 'SingletonLock')).catch(() => {}),
       _writeChromePreferences(userDir, preferences, launchOptions.preferences as ChromePreferences),
     ])
     // normalize the --load-extensions argument by
@@ -569,7 +543,7 @@ export = {
     args.push(`--user-data-dir=${userDir}`)
     args.push(`--disk-cache-dir=${cacheDir}`)
 
-    debug('launching in chrome with debugging port', { url, args, port })
+    debug('launching in chrome with debugging port %o', { url, args, port })
 
     // FIRST load the blank page
     // first allows us to connect the remote interface,
@@ -584,7 +558,16 @@ export = {
     // navigate to the actual url
     if (!options.onError) throw new Error('Missing onError in chrome#open')
 
-    browserCriClient = await BrowserCriClient.create(['127.0.0.1'], port, browser.displayName, options.onError, onReconnect)
+    browserCriClient = await BrowserCriClient.create({
+      hosts: ['127.0.0.1'],
+      port,
+      browserName: browser.displayName,
+      onAsynchronousError: options.onError,
+      onReconnect,
+      protocolManager: options.protocolManager,
+      fullyManageTabs: true,
+      onServiceWorkerClientEvent: automation.onServiceWorkerClientEvent,
+    })
 
     la(browserCriClient, 'expected Chrome remote interface reference', browserCriClient)
 
@@ -603,7 +586,7 @@ export = {
     launchedBrowser.browserCriClient = browserCriClient
 
     launchedBrowser.kill = (...args) => {
-      this.clearInstanceState()
+      this.clearInstanceState({ gracefulShutdown: true })
 
       debug('closing chrome')
 
@@ -612,10 +595,20 @@ export = {
 
     const pageCriClient = await browserCriClient.attachToTargetUrl('about:blank')
 
-    await this.attachListeners(url, pageCriClient, automation, options)
+    await cdpSocketServer?.attachCDPClient(pageCriClient)
+
+    await this.attachListeners(url, pageCriClient, automation, options, browser)
+
+    await utils.executeAfterBrowserLaunch(browser, {
+      webSocketDebuggerUrl: browserCriClient.getWebSocketDebuggerUrl(),
+    })
 
     // return the launched browser process
     // with additional method to close the remote connection
     return launchedBrowser
+  },
+
+  async closeExtraTargets () {
+    return browserCriClient?.closeExtraTargets()
   },
 }
