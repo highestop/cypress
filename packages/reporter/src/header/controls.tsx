@@ -6,7 +6,7 @@ import React from 'react'
 import Tooltip from '@cypress/react-tooltip'
 
 import defaultEvents, { Events } from '../lib/events'
-import { AppState } from '../lib/app-state'
+import type { AppState } from '../lib/app-state'
 
 import ChevronDownIcon from '@packages/frontend-shared/src/assets/icons/chevron-down-small_x16.svg'
 import ChevronUpIcon from '@packages/frontend-shared/src/assets/icons/chevron-up-small_x16.svg'
@@ -24,7 +24,7 @@ interface Props {
   appState: AppState
 }
 
-const Controls = observer(({ events = defaultEvents, appState }: Props) => {
+const Controls: React.FC<Props> = observer(({ events = defaultEvents, appState }: Props) => {
   const emit = (event: string) => () => events.emit(event)
   const togglePreferencesMenu = () => {
     appState.togglePreferencesMenu()
@@ -81,5 +81,7 @@ const Controls = observer(({ events = defaultEvents, appState }: Props) => {
     </div>
   )
 })
+
+Controls.displayName = 'Controls'
 
 export default Controls

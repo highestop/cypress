@@ -56,7 +56,7 @@ export class HtmlDataSource {
       'reporterUrl',
       'namespace',
       'socketIoRoute',
-      'protocolEnabled',
+      'isDefaultProtocolEnabled',
       'hideCommandLog',
       'hideRunnerUi',
     ]

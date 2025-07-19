@@ -1,5 +1,5 @@
 @mixin inner-header {
-  background: $gray-1000;
+  background: $gray-1100;
   display: block;
   font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen-Sans,Ubuntu,Cantarell,"Helvetica Neue",sans-serif;
   font-size: 14px;
@@ -28,4 +28,26 @@
   &:after {
     bottom: 0;
   }
+}
+
+@mixin gutter-alignment {
+  flex-shrink: 0;
+  min-height: 1px; // because some numbers are empty
+  max-height: 28px; // because some numbers are empty
+  padding-top: 4px;
+  padding-bottom: 4px;
+  text-align: right;
+  width: 24px;
+}
+
+@mixin command-info-padding {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  align-self: center;
+}
+
+@mixin group-indent-width {
+  width: 18px;
+  min-width: 18px;
+  max-width: 18px;
 }

@@ -2,7 +2,7 @@ import cs from 'classnames'
 import { observer } from 'mobx-react'
 import React from 'react'
 
-import { StatsStore } from './stats-store'
+import type { StatsStore } from './stats-store'
 
 import FailedIcon from '@packages/frontend-shared/src/assets/icons/status-failed_x12.svg'
 import PassedIcon from '@packages/frontend-shared/src/assets/icons/status-passed_x12.svg'
@@ -14,7 +14,7 @@ interface Props {
   stats: StatsStore
 }
 
-const Stats = observer(({ stats }: Props) => (
+const Stats: React.FC<Props> = observer(({ stats }: Props) => (
   <ul aria-label='Stats' className='stats'>
     <li className='passed'>
       <PassedIcon aria-hidden="true" />
@@ -33,5 +33,7 @@ const Stats = observer(({ stats }: Props) => (
     </li>
   </ul>
 ))
+
+Stats.displayName = 'Stats'
 
 export default Stats

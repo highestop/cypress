@@ -1,6 +1,7 @@
-import { FoundBrowser, Editor, AllowedState, AllModeOptions, TestingType, BrowserStatus, PACKAGE_MANAGERS, AuthStateName, MIGRATION_STEPS, MigrationStep, BannerState } from '@packages/types'
+import { FoundBrowser, Editor, AllowedState, AllModeOptions, TestingType, BrowserStatus, PACKAGE_MANAGERS, AuthStateName, MIGRATION_STEPS, MigrationStep, StudioLifecycleManagerShape } from '@packages/types'
 import { WizardBundler, CT_FRAMEWORKS, resolveComponentFrameworkDefinition, ErroredFramework } from '@packages/scaffold-config'
 import type { NexusGenObjects } from '@packages/graphql/src/gen/nxs.gen'
+// tslint:disable-next-line no-implicit-dependencies - electron dep needs to be defined
 import type { App, BrowserWindow } from 'electron'
 import type { ChildProcess } from 'child_process'
 import type { SocketIONamespace, SocketIOServer } from '@packages/socket'
@@ -21,7 +22,7 @@ export interface AuthenticatedUserShape {
 
 export interface ProjectShape {
   projectRoot: string
-  savedState?: () => Promise<Maybe<SavedStateShape>>
+  savedState?: () => Promise<AllowedState>
 }
 
 export interface ServersDataShape {
@@ -46,15 +47,6 @@ export interface LocalSettingsDataShape {
   preferences: AllowedState
 }
 
-export interface SavedStateShape {
-  firstOpened?: number | null
-  lastOpened?: number | null
-  promptsShown?: object | null
-  banners?: BannerState | null
-  lastProjectId?: string | null
-  specFilter?: string | null
-}
-
 export interface ConfigChildProcessShape {
   /**
    * Child process executing the config & sourcing plugin events
@@ -75,6 +67,7 @@ export interface AppDataShape {
   browsers: ReadonlyArray<FoundBrowser> | null
   projects: ProjectShape[]
   nodePath: Maybe<string>
+  nodeVersion: Maybe<string>
   browserStatus: BrowserStatus
   browserUserAgent: string | null
   relaunchBrowser: boolean
@@ -93,7 +86,6 @@ export interface WizardDataShape {
 export interface MigrationDataShape {
   // TODO: have the model of migration here
   step: MigrationStep
-  videoEmbedHtml: string | null
   legacyConfigForMigration?: LegacyCypressConfigJson | null
   filteredSteps: MigrationStep[]
   flags: {
@@ -172,6 +164,7 @@ export interface CoreDataShape {
   cloudProject: CloudDataShape
   eventCollectorSource: EventCollectorSource | null
   didBrowserPreviouslyHaveUnexpectedExit: boolean
+  studioLifecycleManager?: StudioLifecycleManagerShape
 }
 
 /**
@@ -195,6 +188,7 @@ export function makeCoreData (modeOptions: Partial<AllModeOptions> = {}): CoreDa
       browsers: null,
       projects: [],
       nodePath: modeOptions.userNodePath,
+      nodeVersion: modeOptions.userNodeVersion,
       browserStatus: 'closed',
       browserUserAgent: null,
       relaunchBrowser: false,
@@ -223,7 +217,6 @@ export function makeCoreData (modeOptions: Partial<AllModeOptions> = {}): CoreDa
     },
     migration: {
       step: 'renameAuto',
-      videoEmbedHtml: null,
       legacyConfigForMigration: null,
       filteredSteps: [...MIGRATION_STEPS],
       flags: {
@@ -253,6 +246,7 @@ export function makeCoreData (modeOptions: Partial<AllModeOptions> = {}): CoreDa
     },
     eventCollectorSource: null,
     didBrowserPreviouslyHaveUnexpectedExit: false,
+    studioLifecycleManager: undefined,
   }
 
   async function machineId (): Promise<string | null> {

@@ -6,6 +6,7 @@
       :options="editorOptions"
       item-value="name"
       item-key="id"
+      :label-id="labelId"
       :placeholder="t('settingsPage.editor.noEditorSelectedPlaceholder')"
       class="w-[400px]"
       @update:model-value="updateEditor"
@@ -94,7 +95,7 @@ const icons: Record<string, FunctionalComponent<SVGAttributes, {}>> = {
 const customEditor = { id: 'custom', icon: Terminal, name: 'Custom', binary: 'custom' }
 
 const editorOptions = computed(() => {
-  const editors = props.gql.localSettings.availableEditors?.map((x) => ({ ...x, icon: icons[x.id] })) || []
+  const editors = props.gql.localSettings.availableEditors?.map((x) => ({ ...x, icon: icons[x.id] ?? icons['custom'] })) || []
 
   editors.push(customEditor)
 
@@ -118,6 +119,7 @@ fragment ChooseExternalEditor on Query {
 
 const props = defineProps<{
   gql: ChooseExternalEditorFragment
+  labelId: string
 }>()
 
 const { t } = useI18n()

@@ -21,6 +21,9 @@ import {
  *  - session data SHOULD be cleared between specs in run mode
  */
 export default function (Commands, Cypress, cy) {
+  // 20s timeout used for internal cy commands within the session command
+  const INTERNAL_COMMAND_TIMEOUT = 20_000
+
   const sessionsManager = new SessionsManager(Cypress, cy)
   const sessions = sessionsManager.sessions
 
@@ -57,7 +60,7 @@ export default function (Commands, Cypress, cy) {
       }
 
       // stringify deterministically if we were given an object
-      id = _.isString(id) ? id : stringifyStable(id)
+      id = _.isString(id) ? id : stringifyStable(id) as string
 
       if (!setup || !_.isFunction(setup)) {
         $errUtils.throwErrByPath('sessions.session.wrongArgSetup')
@@ -92,7 +95,7 @@ export default function (Commands, Cypress, cy) {
         })
       }
 
-      let session: Cypress.SessionData = sessionsManager.getActiveSession(id)
+      let session: Cypress.SessionData = sessionsManager.getActiveSession(id as string)
       const isRegisteredSessionForSpec = sessionsManager.registeredSessions.has(id)
 
       if (session) {
@@ -149,7 +152,7 @@ export default function (Commands, Cypress, cy) {
           message: '',
           type: 'system',
         }, (setupLogGroup) => {
-          return cy.then(async () => {
+          return cy.then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async () => {
             // Catch when a cypress command fails in the setup function to correctly update log status
             // before failing command and ending command queue.
             cy.state('onQueueFailed', (err, _queue) => {
@@ -180,7 +183,7 @@ export default function (Commands, Cypress, cy) {
               cy.breakSubjectLinksToCurrentChainer()
             }
           })
-          .then(async () => {
+          .then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async () => {
             cy.state('onQueueFailed', null)
             const data = await sessions.getCurrentSessionData()
 
@@ -241,7 +244,7 @@ export default function (Commands, Cypress, cy) {
             }
           },
         }, (validateLog) => {
-          return cy.then(async () => {
+          return cy.then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async () => {
             const isValidSession = true
             let caughtCommandErr = false
             let _commandToRunAfterValidation
@@ -252,9 +255,11 @@ export default function (Commands, Cypress, cy) {
                 err = new Error(err)
               }
 
+              const userInvocationStack = $errUtils.getUserInvocationStack(err, Cypress.state)
+
               err = $errUtils.enhanceStack({
                 err,
-                userInvocationStack: $errUtils.getUserInvocationStack(err, Cypress.state),
+                userInvocationStack,
                 projectRoot: Cypress.config('projectRoot'),
               })
 
@@ -348,7 +353,7 @@ export default function (Commands, Cypress, cy) {
               throw err
             }
 
-            _commandToRunAfterValidation = cy.then(async () => {
+            _commandToRunAfterValidation = cy.then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async () => {
               Cypress.state('onQueueFailed', null)
 
               if (caughtCommandErr) {
@@ -432,7 +437,7 @@ export default function (Commands, Cypress, cy) {
        *   2. validate session
        */
       const createSessionWorkflow = (existingSession, step: 'create' | 'recreate') => {
-        return cy.then(async () => {
+        return cy.then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async () => {
           setSessionLogStatus(statusMap.inProgress(step))
 
           await navigateAboutBlank()
@@ -440,8 +445,8 @@ export default function (Commands, Cypress, cy) {
 
           return cy.whenStable(() => createSession(existingSession, step))
         })
-        .then(() => validateSession(existingSession, step))
-        .then(async (isValidSession: boolean) => {
+        .then({ timeout: INTERNAL_COMMAND_TIMEOUT }, () => validateSession(existingSession, step))
+        .then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async (isValidSession: boolean) => {
           if (!isValidSession) {
             return 'failed'
           }
@@ -460,15 +465,15 @@ export default function (Commands, Cypress, cy) {
        *   3. if validation fails, catch error and recreate session
        */
       const restoreSessionWorkflow = (existingSession: Cypress.SessionData) => {
-        return cy.then(async () => {
+        return cy.then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async () => {
           setSessionLogStatus(statusMap.inProgress(SESSION_STEPS.restore))
           await navigateAboutBlank()
           await sessions.clearCurrentSessionData()
 
           return restoreSession(existingSession)
         })
-        .then(() => validateSession(existingSession, SESSION_STEPS.restore))
-        .then((isValidSession: boolean) => {
+        .then({ timeout: INTERNAL_COMMAND_TIMEOUT }, () => validateSession(existingSession, SESSION_STEPS.restore))
+        .then({ timeout: INTERNAL_COMMAND_TIMEOUT }, (isValidSession: boolean) => {
           if (!isValidSession) {
             return createSessionWorkflow(existingSession, SESSION_STEPS.recreate)
           }
@@ -493,7 +498,7 @@ export default function (Commands, Cypress, cy) {
       }
 
       return logGroup(Cypress, groupDetails, (log) => {
-        return cy.then(async () => {
+        return cy.then({ timeout: INTERNAL_COMMAND_TIMEOUT }, async () => {
           _log = log
 
           if (!session.hydrated) {
@@ -509,7 +514,7 @@ export default function (Commands, Cypress, cy) {
           }
 
           return restoreSessionWorkflow(session)
-        }).then((status: 'created' | 'restored' | 'recreated' | 'failed') => {
+        }).then({ timeout: INTERNAL_COMMAND_TIMEOUT }, (status: 'created' | 'restored' | 'recreated' | 'failed') => {
           return navigateAboutBlank()
           .then(() => {
             setSessionLogStatus(status)

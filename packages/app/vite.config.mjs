@@ -1,11 +1,11 @@
-import { makeConfig } from '../frontend-shared/vite.config.mjs'
+import { makeConfig } from '@packages/frontend-shared/vite.config.mjs'
 import Layouts from 'vite-plugin-vue-layouts'
 import Pages from 'vite-plugin-pages'
 import Copy from 'rollup-plugin-copy'
 import Legacy from '@vitejs/plugin-legacy'
 import { resolve } from 'path'
 
-export default makeConfig({
+const config = makeConfig({
   optimizeDeps: {
     include: [
       'javascript-time-ago',
@@ -19,7 +19,34 @@ export default makeConfig({
       'events',
       '@popperjs/core',
       '@opentelemetry/*',
+      '@headlessui/vue',
+      '@cypress-design/vue-icon',
+      '@cypress-design/vue-statusicon',
+      'human-interval',
+      'floating-vue',
+      'dayjs',
+      'dayjs/plugin/relativeTime',
+      'dayjs/plugin/duration',
+      'dayjs/plugin/customParseFormat',
+      'dayjs/plugin/utc',
+      'markdown-it',
+      '@toycode/markdown-it-class',
+      '@cypress-design/vue-tabs',
+      'gravatar',
+      '@opentelemetry/sdk-trace-web',
+      '@opentelemetry/resources',
+      '@opentelemetry/sdk-trace-base',
+      '@opentelemetry/api',
+      '@opentelemetry/semantic-conventions',
+      '@opentelemetry/exporter-trace-otlp-http',
+      '@opentelemetry/core',
     ],
+    esbuildOptions: {
+      target: 'ES2022',
+    },
+  },
+  build: {
+    target: 'ES2022',
   },
 }, {
   plugins: [
@@ -32,9 +59,11 @@ export default makeConfig({
       }],
     }),
     Legacy({
-      targets: ['Chrome >= 80', 'Firefox >= 86', 'Edge >= 80'],
+      targets: ['last 3 major versions'],
       modernPolyfills: true,
       renderLegacyChunks: false,
     }),
   ],
 })
+
+export default config

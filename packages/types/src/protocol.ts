@@ -1,8 +1,9 @@
-import type { Database } from 'better-sqlite3'
+import type Database from 'better-sqlite3'
 import type ProtocolMapping from 'devtools-protocol/types/protocol-mapping'
 import type { IncomingHttpHeaders } from 'http'
 import type { Readable } from 'stream'
 import type { ProxyTimings } from './proxy'
+import type { FoundSpec } from './spec'
 
 type Commands = ProtocolMapping.Commands
 type Command<T extends keyof Commands> = Commands[T]
@@ -28,7 +29,6 @@ export interface AppCaptureProtocolCommon {
   preAfterTest(test: Record<string, any>, options: Record<string, any>): Promise<void>
   afterTest(test: Record<string, any>): Promise<void>
   afterSpec (): Promise<{ durations: AfterSpecDurations } | undefined>
-  connectToBrowser (cdpClient: CDPClient): Promise<void>
   pageLoading (input: any): void
   resetTest (testId: string): void
   responseEndedWithEmptyBody: (options: ResponseEndedWithEmptyBodyOptions) => void
@@ -38,10 +38,12 @@ export interface AppCaptureProtocolCommon {
 
 export interface AppCaptureProtocolInterface extends AppCaptureProtocolCommon {
   getDbMetadata (): { offset: number, size: number } | undefined
-  beforeSpec ({ workingDirectory, archivePath, dbPath, db }: { workingDirectory: string, archivePath: string, dbPath: string, db: Database }): void
+  beforeSpec ({ spec, workingDirectory, archivePath, dbPath, db }: { spec: FoundSpec & { instanceId: string }, workingDirectory: string, archivePath: string, dbPath: string, db: Database.Database }): void
+  uploadStallSamplingInterval: () => number
+  connectToBrowser (cdpClient: CDPClient): Promise<void>
 }
 
-export type ProtocolCaptureMethod = keyof AppCaptureProtocolInterface | 'setupProtocol' | 'uploadCaptureArtifact' | 'getCaptureProtocolScript' | 'cdpClient.on' | 'getZippedDb' | 'UNKNOWN' | 'createProtocolArtifact' | 'protocolUploadUrl'
+export type ProtocolCaptureMethod = keyof AppCaptureProtocolInterface | 'setupProtocol' | 'prepareProtocol' | 'uploadCaptureArtifact' | 'getCaptureProtocolScript' | 'cdpClient.on' | 'getZippedDb' | 'UNKNOWN' | 'createProtocolArtifact' | 'protocolUploadUrl'
 
 export interface ProtocolError {
   args?: any
@@ -83,10 +85,30 @@ export type CaptureArtifact = {
   filePath: string
 }
 
+type ProjectConfig = {
+  devServerPublicPathRoute: string
+  namespace: string
+  port: number | null
+  proxyUrl?: string
+}
+
 export type ProtocolManagerOptions = {
   runId: string
   testingType: 'e2e' | 'component'
+  projectId?: string
+  cloudApi: {
+    url: string
+    retryWithBackoff (fn: (attemptIndex: number) => Promise<any>): Promise<any>
+    requestPromise: {
+      get (options: any): Promise<any>
+    }
+  }
+  projectConfig: ProjectConfig
   mountVersion?: number
+  debugData?: {
+    filePreprocessorHandlerText?: string
+  }
+  mode?: 'record' | 'studio'
 }
 
 type UploadCaptureArtifactResult = {
@@ -105,14 +127,18 @@ export type AfterSpecDurations = {
 }
 
 export interface ProtocolManagerShape extends AppCaptureProtocolCommon {
-  protocolEnabled: boolean
+  isProtocolEnabled: boolean
   networkEnableOptions?: { maxTotalBufferSize: number, maxResourceBufferSize: number, maxPostDataSize: number }
-  setupProtocol(script: string, options: ProtocolManagerOptions): Promise<void>
-  beforeSpec (spec: { instanceId: string }): void
+  setupProtocol(): void
+  prepareProtocol (script: string, options: ProtocolManagerOptions): Promise<void>
+  prepareAndSetupProtocol (script: string, options: ProtocolManagerOptions): Promise<void>
+  beforeSpec (spec: FoundSpec & { instanceId: string }): void
   afterSpec (): Promise<{ durations: AfterSpecDurations } | undefined>
   reportNonFatalErrors (clientMetadata: any): Promise<void>
-  uploadCaptureArtifact(artifact: CaptureArtifact): Promise<UploadCaptureArtifactResult | void>
-
+  uploadCaptureArtifact(artifact: CaptureArtifact): Promise<UploadCaptureArtifactResult | undefined>
+  connectToBrowser (cdpClient: CDPClient): Promise<void>
+  close (): void
+  dbPath?: string
 }
 
 type Response = {

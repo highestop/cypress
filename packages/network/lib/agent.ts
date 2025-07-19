@@ -126,7 +126,7 @@ export const createProxySock = (opts: CreateProxySockOpts, cb: CreateProxySockCb
 
 export const isRequestHttps = (options: http.RequestOptions) => {
   // WSS connections will not have an href, but you can tell protocol from the defaultAgent
-  return _.get(options, '_defaultAgent.protocol') === 'https:' || (options.href || '').slice(0, 6) === 'https'
+  return _.get(options, '_defaultAgent.protocol') === 'https:' || options.protocol === 'https:' || (options.href || '').slice(0, 6) === 'https:'
 }
 
 export const isResponseStatusCode200 = (head: string) => {
@@ -210,7 +210,26 @@ export class CombinedAgent {
       }
     }
 
+    // If the path property is a fully qualified URL, which is what as Axios appears to set,
+    // parse the URL and set the href, path, and port based on this path
+    if (typeof options.path === 'string' && /^http(s)?:\/\//.test(options.path)) {
+      const pathUrl = new URL(options.path)
+      const portToSet = pathUrl.port ?? options.port
+
+      options.href = options.path
+      options.path = pathUrl.pathname
+
+      if (portToSet) {
+        options.port = Number(portToSet)
+      }
+    }
+
     const isHttps = isRequestHttps(options)
+
+    // Ensure that HTTPS requests are using 443
+    if (isHttps && options.port === 80) {
+      options.port = 443
+    }
 
     if (!options.href) {
       // options.path can contain query parameters, which url.format will not-so-kindly urlencode for us...
@@ -223,9 +242,7 @@ export class CombinedAgent {
       }) + options.path
     }
 
-    if (!options.uri) {
-      options.uri = url.parse(options.href)
-    }
+    const uri = options.uri = options.uri ?? url.parse(options.href)
 
     debug('addRequest called %o', { isHttps, ..._.pick(options, 'href') })
 
@@ -235,12 +252,12 @@ export class CombinedAgent {
       debug('got family %o', _.pick(options, 'family', 'href'))
 
       if (isHttps) {
-        _.assign(options, clientCertificateStore.getClientCertificateAgentOptionsForUrl(options.uri))
+        _.assign(options, clientCertificateStore.getClientCertificateAgentOptionsForUrl(uri))
 
         return this.httpsAgent.addRequest(req, options as https.RequestOptions)
       }
 
-      this.httpAgent.addRequest(req, options)
+      return this.httpAgent.addRequest(req, options)
     })
   }
 }
@@ -325,20 +342,24 @@ class HttpsAgent extends https.Agent {
     super(opts)
   }
 
-  addRequest (req: http.ClientRequest, options: https.RequestOptions) {
+  async addRequest (req: http.ClientRequest, options: https.RequestOptions) {
     // Ensure we have a proper port defined otherwise node has assumed we are port 80
     // (https://github.com/nodejs/node/blob/master/lib/_http_client.js#L164) since we are a combined agent
     // rather than an http or https agent. This will cause issues with fetch requests (@cypress/request already handles it:
     // https://github.com/cypress-io/request/blob/master/request.js#L301-L303)
-    if (!options.uri.port && options.uri.protocol === 'https:') {
-      options.uri.port = String(443)
+    if (!options?.uri?.port && options?.uri?.protocol === 'https:') {
+      options.uri = {
+        ...options.uri,
+        port: String(443),
+      }
+
       options.port = 443
     }
 
     if (baseCaOptions) {
       super.addRequest(req, mergeCAOptions(options, baseCaOptions))
     } else {
-      baseCaOptionsPromise.then((caOptions) => {
+      await baseCaOptionsPromise.then((caOptions) => {
         super.addRequest(req, mergeCAOptions(options, caOptions))
       })
     }
@@ -365,8 +386,8 @@ class HttpsAgent extends https.Agent {
     debug(`Creating proxied socket for ${options.href} through ${options.proxy}`)
 
     const proxy = url.parse(options.proxy)
-    const port = options.uri.port || '443'
-    const hostname = options.uri.hostname || 'localhost'
+    const port = options.uri?.port || '443'
+    const hostname = options.uri?.hostname || 'localhost'
 
     createProxySock({ proxy, shouldRetry: options.shouldRetry }, (originalErr?, proxySocket?, triggerRetry?) => {
       if (originalErr) {

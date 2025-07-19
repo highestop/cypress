@@ -4,11 +4,11 @@ import os from 'os'
 
 export const e2ePath = Fixtures.projectPath('e2e')
 
-export const DEFAULT_BROWSERS = ['electron', 'chrome', 'firefox', 'webkit']
+export const DEFAULT_BROWSERS = ['electron', 'chrome', 'chrome-for-testing', 'firefox', 'webkit']
 
 export const pathUpToProjectName = Fixtures.projectPath('')
 
-export const browserNameVersionRe = /(Browser\:\s+)(Custom |)(Electron|Chrome|Canary|Chromium|Firefox|WebKit)(\s\d+)(\s\(\w+\))?(\s+)/
+export const browserNameVersionRe = /(Browser\:\s+)(Custom |)(Electron|Chrome|Chrome for Testing|Canary|Chromium|Firefox|WebKit)(\s\d+)(\s\(\w+\))?(\s+)/
 
 const availableBrowsersRe = /(Available browsers found on your system are:)([\s\S]+)/g
 const crossOriginErrorRe = /(Blocked a frame .* from accessing a cross-origin frame.*|Permission denied.*cross-origin object.*)/gm
@@ -96,18 +96,18 @@ export const replaceStackTraceLines = (str: string, browserName: 'electron' | 'f
 
   const stackTraceRegex = new RegExp(`${leadingNewLinesAndWhitespace}(?:${verboseStyleLine}|${condensedStyleLine})${remainderOfStack}`, 'g')
 
-  return str.replace(stackTraceRegex, (match: string, ...parts: string[]) => {
-    let post = parts[0]
+  return str.replace(stackTraceRegex, (match: string, trailingWhitespace: string | undefined, offset: number) => {
+    // the whitespace between direct error stack and the "From Node.js Internals:" stack,
+    // in firefox, in visit_spec erorr contexts, does not normalize properly: it needs to
+    // be "\n  \n", in order to match other browsers. So, in cases of firefox, if that string
+    // is found immediately following the matching stack trace, we need to normalize to "\n  \n".
+    const replacementWhitespace = str.substring(offset + match.length).indexOf('From Node.js Internals') === 2 ?
+      '\n  \n' : '\n'
+    const normalizedTrailingWhitespace = browserName === 'firefox' ?
+      trailingWhitespace.replace(whiteSpaceBetweenNewlines, replacementWhitespace) :
+      trailingWhitespace
 
-    console.log('POST:')
-    console.log(`"${post}"`)
-    console.log('/POST')
-
-    if (browserName === 'firefox') {
-      post = post.replace(whiteSpaceBetweenNewlines, '\n')
-    }
-
-    return `\n      [stack trace lines]${post}`
+    return `\n      [stack trace lines]${normalizedTrailingWhitespace}`
   })
 }
 
@@ -164,6 +164,8 @@ export const normalizeStdout = function (str: string, options: any = {}) {
   .replace(crossOriginErrorRe, '[Cross origin error message]')
   // Replaces connection warning since Chrome or Firefox sometimes take longer to connect
   .replace(/Still waiting to connect to .+, retrying in 1 second \(attempt .+\/.+\)\n/g, '')
+  // Replaces CDP connection error message in Firefox since Cypress will retry
+  .replace(/\nFailed to spawn CDP with Firefox. Retrying.*\.\.\.\n/g, '')
 
   if (options.browser === 'webkit') {
     // WebKit throws for lookups on undefined refs with "Can't find variable: <var>"

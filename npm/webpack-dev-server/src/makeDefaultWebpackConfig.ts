@@ -3,6 +3,8 @@ import debugLib from 'debug'
 import type { Configuration } from 'webpack'
 import type { CreateFinalWebpackConfig } from './createWebpackDevServer'
 import { CypressCTWebpackPlugin } from './CypressCTWebpackPlugin'
+import { isWebpackBundleAnalyzerEnabled, WBADebugNamespace } from './util'
+import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer'
 
 const debug = debugLib('cypress:webpack-dev-server:makeDefaultWebpackConfig')
 
@@ -17,6 +19,7 @@ export function makeCypressWebpackConfig (
   const {
     devServerConfig: {
       cypressConfig: {
+        justInTimeCompile,
         port,
         projectRoot,
         devServerPublicPathRoute,
@@ -94,26 +97,22 @@ export function makeCypressWebpackConfig (
         webpack,
         indexHtmlFile,
       }),
+      ...(isWebpackBundleAnalyzerEnabled() ? [new BundleAnalyzerPlugin()] : []),
     ],
     devtool: 'inline-source-map',
   } as any
 
-  if (isRunMode) {
-    // Disable file watching when executing tests in `run` mode
-    finalConfig.watchOptions = {
-      ignored: '**/*',
-    }
+  if (isWebpackBundleAnalyzerEnabled()) {
+    debugLib(WBADebugNamespace)('webpack-bundle-analyzer is enabled.')
   }
 
-  if (webpackDevServerMajorVersion === 5) {
-    return {
-      ...finalConfig,
-      devServer: {
-        port: webpackDevServerPort,
-        client: {
-          overlay: false,
-        },
-      },
+  if (isRunMode) {
+    // if justInTimeCompile is configured, we need to watch for file changes as the spec entries are going to be updated per test
+    const ignored = justInTimeCompile ? /node_modules/ : '**/*'
+
+    // Disable file watching when executing tests in `run` mode
+    finalConfig.watchOptions = {
+      ignored,
     }
   }
 
@@ -129,12 +128,14 @@ export function makeCypressWebpackConfig (
     }
   }
 
-  // @ts-ignore
+  // default is webpack-dev-server v5
   return {
     ...finalConfig,
     devServer: {
       port: webpackDevServerPort,
-      overlay: false,
+      client: {
+        overlay: false,
+      },
     },
   }
 }

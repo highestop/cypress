@@ -1,6 +1,6 @@
 import debugFn from 'debug'
 import semverMajor from 'semver/functions/major'
-import type { UserConfig } from 'vite-5'
+import type { UserConfig } from 'vite-6'
 import { getVite, Vite } from './getVite'
 import { createViteDevServerConfig } from './resolveConfig'
 
@@ -50,7 +50,12 @@ export async function devServer (config: ViteDevServerConfig): Promise<Cypress.R
     port,
     // Close is for unit testing only. We kill this child process which will handle the closing of the server
     close (cb) {
-      return server.close().then(() => cb?.()).catch(cb)
+      debug('closing dev server')
+
+      return server.close().then(() => {
+        debug('closed dev server')
+        cb?.()
+      }).catch(cb)
     },
   }
 }

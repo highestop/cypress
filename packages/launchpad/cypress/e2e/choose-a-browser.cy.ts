@@ -3,6 +3,9 @@ import type { FoundBrowser } from '@packages/types'
 describe('Choose a browser page', () => {
   beforeEach(() => {
     cy.scaffoldProject('launchpad')
+    cy.withCtx((ctx, _) => {
+      ctx.actions.project.launchCount = 0
+    })
   })
 
   describe('System Browsers Detected', () => {
@@ -11,6 +14,23 @@ describe('Choose a browser page', () => {
         filter: (browser) => {
           return Cypress._.includes(['chrome', 'firefox', 'electron', 'edge'], browser.name) && browser.channel === 'stable'
         },
+      })
+    })
+
+    it('launches when --browser is passed alone through the command line', () => {
+      cy.withCtx((ctx, o) => {
+        o.sinon.stub(ctx._apis.projectApi, 'launchProject').resolves()
+      })
+
+      cy.openProject('launchpad', ['--browser', 'edge'])
+      cy.visitLaunchpad()
+
+      cy.get('[data-cy=card]').then(($buttons) => {
+        $buttons[0].click()
+      })
+
+      cy.withRetryableCtx((ctx, o) => {
+        expect(ctx._apis.projectApi.launchProject).to.be.calledOnce
       })
     })
 
@@ -23,11 +43,10 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e', '--browser', 'edge'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
-      cy.findByRole('radio', { name: 'Edge v8', checked: true })
+      cy.findByRole('radio', { name: 'Edge v9', checked: true })
 
       cy.percySnapshot()
 
@@ -37,9 +56,12 @@ describe('Choose a browser page', () => {
     })
 
     it('shows warning when launched with --browser name that cannot be matched to found browsers', () => {
+      cy.withCtx((ctx, o) => {
+        o.sinon.stub(ctx._apis.projectApi, 'launchProject').resolves()
+      })
+
       cy.openProject('launchpad', ['--e2e', '--browser', 'doesNotExist'])
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
       cy.get('[data-cy="alert-header"]').should('contain', 'Warning: Browser Not Found')
@@ -55,6 +77,9 @@ describe('Choose a browser page', () => {
       // Ensure warning can be dismissed
       cy.get('[data-cy="alert-suffix-icon"]').click()
       cy.get('[data-cy="alert-header"]').should('not.exist')
+      cy.withRetryableCtx((ctx, o) => {
+        expect(ctx._apis.projectApi.launchProject).not.to.be.called
+      })
     })
 
     it('shows warning when launched with --browser path option that cannot be matched to found browsers', () => {
@@ -63,7 +88,6 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e', '--browser', path])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
@@ -79,8 +103,10 @@ describe('Choose a browser page', () => {
       // varies depending on platform
       if (Cypress.platform === 'win32') {
         cy.get('@AlertBody').find('code').eq(1).should('have.text', `win-version-info is unable to access file: \\${path.replaceAll('/', '\\')}`)
-      } else {
+      } else if (Cypress.platform === 'linux') {
         cy.get('@AlertBody').find('code').eq(1).should('have.text', `spawn ${path} ENOENT`)
+      } else {
+        cy.get('@AlertBody').find('code').eq(1).should('have.text', `Unable to find browser with path ${path}`)
       }
 
       cy.percySnapshot()
@@ -98,24 +124,22 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
       cy.findByRole('radio', { name: 'Chrome v1' })
 
-      cy.findByRole('radio', { name: 'Firefox v5' })
+      cy.findByRole('radio', { name: 'Firefox v6' })
 
-      cy.findByRole('radio', { name: 'Electron v12' })
+      cy.findByRole('radio', { name: 'Electron v13' })
 
-      cy.findByRole('radio', { name: 'Edge v8' })
+      cy.findByRole('radio', { name: 'Edge v9' })
     })
 
     it('performs mutation to launch selected browser when launch button is pressed', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
@@ -168,12 +192,11 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
       cy.findByRole('radio', { name: 'Chrome v1', checked: true }).as('chromeItem')
-      cy.findByRole('radio', { name: 'Firefox v5', checked: false }).as('firefoxItem')
+      cy.findByRole('radio', { name: 'Firefox v6', checked: false }).as('firefoxItem')
 
       cy.contains('button', 'Start E2E Testing in Chrome').should('be.visible')
 
@@ -184,7 +207,7 @@ describe('Choose a browser page', () => {
       })
 
       cy.findByRole('radio', { name: 'Chrome v1', checked: false })
-      cy.findByRole('radio', { name: 'Firefox v5', checked: true })
+      cy.findByRole('radio', { name: 'Firefox v6', checked: true })
 
       cy.contains('button', 'Start E2E Testing in Firefox').should('be.visible')
     })
@@ -193,7 +216,6 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
@@ -211,8 +233,6 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
-
       cy.withCtx((ctx) => {
         ctx.actions.app.setBrowserStatus('open')
       })
@@ -228,7 +248,6 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.withCtx((ctx) => {
         ctx.actions.app.setBrowserStatus('open')
@@ -269,7 +288,6 @@ describe('Choose a browser page', () => {
       })
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
@@ -282,7 +300,6 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
@@ -308,13 +325,12 @@ describe('Choose a browser page', () => {
       })
 
       cy.contains('button', 'Start E2E Testing in Firefox').should('be.visible')
-      cy.findByRole('radio', { name: 'Firefox v5', checked: true }).should('be.visible')
+      cy.findByRole('radio', { name: 'Firefox v6', checked: true }).should('be.visible')
     })
 
     it('should return to welcome screen if user modifies the config file to not include the current testing type and recover', () => {
       cy.openProject('launchpad', ['--e2e'])
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
@@ -352,13 +368,12 @@ describe('Choose a browser page', () => {
       cy.openProject('launchpad', ['--e2e'])
 
       cy.visitLaunchpad()
-      cy.skipWelcome()
 
       cy.get('h1').should('contain', 'Choose a browser')
 
       cy.get('[data-cy="open-browser-list"]').children().should('have.length', 1)
 
-      cy.findByRole('radio', { name: 'Electron v12', checked: true })
+      cy.findByRole('radio', { name: 'Electron v13', checked: true })
       cy.percySnapshot()
     })
   })

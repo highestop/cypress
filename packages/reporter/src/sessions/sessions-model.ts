@@ -1,4 +1,4 @@
-import { observable } from 'mobx'
+import { observable, makeObservable } from 'mobx'
 import Instrument, { InstrumentProps } from '../instruments/instrument-model'
 import { determineTagType } from './utils'
 import type { SessionStatus } from './utils'
@@ -15,13 +15,20 @@ export interface SessionProps extends InstrumentProps {
 }
 
 export default class Session extends Instrument {
-  @observable name: string
-  @observable status: string
-  @observable isGlobalSession: boolean = false
-  @observable tagType: string
+  name: string
+  status: string
+  isGlobalSession: boolean = false
+  tagType: string
 
   constructor (props: SessionProps) {
     super(props)
+
+    makeObservable(this, {
+      status: observable,
+      isGlobalSession: observable,
+      tagType: observable,
+    })
+
     const { state, sessionInfo: { isGlobalSession, id, status } } = props
 
     this.isGlobalSession = isGlobalSession

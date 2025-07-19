@@ -5,20 +5,22 @@ import { fixtureDirs, ProjectFixtureDir } from '@tooling/system-tests'
 import type { DataContext } from '@packages/data-context'
 import type { AuthenticatedUserShape } from '@packages/data-context/src/data'
 import type { DocumentNode, ExecutionResult } from 'graphql'
-import type { Browser, FoundBrowser, OpenModeOptions } from '@packages/types'
+import { GET_MAJOR_VERSION_FOR_CONTENT, type Browser, type FoundBrowser, type OpenModeOptions } from '@packages/types'
 
 import type { SinonStub } from 'sinon'
 import type sinon from 'sinon'
 import type pDefer from 'p-defer'
 import 'cypress-plugin-tab'
 import type { Response } from 'cross-fetch'
+import type nock from 'nock'
 
-import type { E2ETaskMap } from '../e2e/e2ePluginSetup'
+import type { E2ETaskMap, InternalOpenProjectCapabilities } from '../e2e/e2ePluginSetup'
 import { installCustomPercyCommand } from './customPercyCommand'
 import i18n from '../../src/locales/en-US.json'
 import { addNetworkCommands } from './onlineNetwork'
 import { logInternal } from './utils'
 import { tabUntil } from './tab-until'
+import './browserIconCommands'
 
 configure({ testIdAttribute: 'data-cy' })
 
@@ -77,6 +79,18 @@ export interface FindBrowsersOptions {
    * })
    */
   filter?(browser: Browser): boolean
+}
+
+export interface MockNodeCloudRequestOptions {
+  url: string
+  method: string
+  body: nock.Body
+}
+
+export interface MockNodeCloudStreamingRequestOptions {
+  url: string
+  method: string
+  body: nock.Body
 }
 
 export interface ValidateExternalLinkOptions {
@@ -165,7 +179,7 @@ declare global {
       /**
        * Visits the Cypress launchpad
        */
-      visitLaunchpad(href?: string): Chainable<AUTWindow>
+      visitLaunchpad: typeof visitLaunchpad
       /**
        * Skips the welcome screen of the launchpad
        */
@@ -183,6 +197,20 @@ declare global {
        * Get the AUT <iframe>. Useful for Cypress in Cypress tests.
        */
       getAutIframe(): Chainable<JQuery<HTMLIFrameElement>>
+      /**
+       * Mocks a studio full snapshot as if it were captured in the inner Cypress's protocol.
+       * This is necessary because protocol does not capture things properly in the inner Cypress
+       * when running in Cypress in Cypress.
+       */
+      mockStudioFullSnapshot(fullSnapshot: Record<string, any>): void
+      /**
+       * Mocks a node cloud request
+       */
+      mockNodeCloudRequest(options: { url: string, method: string, body: nock.Body }): void
+      /**
+       * Mocks a node cloud streaming request
+       */
+      mockNodeCloudStreamingRequest(options: { url: string, method: string, body: nock.Body }): void
     }
 
   }
@@ -201,6 +229,10 @@ beforeEach(() => {
   // Reset the ports so we know we need to call "openProject" before each test
   Cypress.env('e2e_serverPort', undefined)
   taskInternal('__internal__beforeEach', undefined)
+})
+
+afterEach(() => {
+  taskInternal('__internal__afterEach', undefined)
 })
 
 after(() => {
@@ -241,17 +273,35 @@ function openGlobalMode (options: OpenGlobalModeOptions = {}) {
 
 type WithPrefix<T extends string> = `${T}${string}`;
 
-function openProject (projectName: WithPrefix<ProjectFixtureDir>, argv: string[] = []) {
+function openProject (projectName: WithPrefix<ProjectFixtureDir>, argv: string[] = [], capabilities: InternalOpenProjectCapabilities = { cloudStudio: false }) {
   if (!fixtureDirs.some((dir) => projectName.startsWith(dir))) {
     throw new Error(`Unknown project ${projectName}`)
   }
 
   return logInternal({ name: 'openProject', message: argv.join(' ') }, () => {
-    return taskInternal('__internal_openProject', { projectName, argv })
+    return taskInternal('__internal_openProject', { projectName, argv, capabilities })
   }).then((obj) => {
     Cypress.env('e2e_serverPort', obj.e2eServerPort)
 
     return obj.modeOptions
+  })
+}
+
+function mockStudioFullSnapshot (fullSnapshot: Record<string, any>) {
+  return logInternal({ name: 'mockStudioFullSnapshot' }, () => {
+    return taskInternal('__internal_mockStudioFullSnapshot', fullSnapshot)
+  })
+}
+
+function mockNodeCloudRequest (options: MockNodeCloudRequestOptions) {
+  return logInternal({ name: 'mockNodeCloudRequest' }, () => {
+    return taskInternal('__internal_mockNodeCloudRequest', options)
+  })
+}
+
+function mockNodeCloudStreamingRequest (options: MockNodeCloudStreamingRequestOptions) {
+  return logInternal({ name: 'mockNodeCloudStreamingRequest' }, () => {
+    return taskInternal('__internal_mockNodeCloudStreamingRequest', options)
   })
 }
 
@@ -384,8 +434,8 @@ function specsPageIsVisible (specsSetup) {
   return cy.get('[data-cy=spec-list-container]').should('be.visible')
 }
 
-function visitLaunchpad () {
-  return logInternal(`visitLaunchpad ${Cypress.env('e2e_launchpadPort')}`, () => {
+function visitLaunchpad (options: { showWelcome?: boolean } = { showWelcome: false }) {
+  function launchpadVisit () {
     return cy.visit(`/__launchpad/index.html`, { log: false }).then((val) => {
       return cy.get('[data-e2e]', { timeout: 10000, log: false }).then(() => {
         return cy.get('.spinner', { timeout: 10000, log: false }).should('not.exist').then(() => {
@@ -393,6 +443,25 @@ function visitLaunchpad () {
         })
       })
     })
+  }
+
+  return logInternal(`visitLaunchpad ${Cypress.env('e2e_launchpadPort')}`, () => {
+    if (!options.showWelcome) {
+      return cy.withCtx(async (ctx, o) => {
+        // avoid re-stubbing already stubbed prompts in case we call getPreferences multiple times
+        if ((ctx._apis.localSettingsApi.getPreferences as any).wrappedMethod === undefined) {
+          o.sinon.stub(ctx._apis.localSettingsApi, 'getPreferences').resolves({ majorVersionWelcomeDismissed: {
+            [o.MAJOR_VERSION_FOR_CONTENT]: Date.now(),
+          } })
+        }
+      }, {
+        MAJOR_VERSION_FOR_CONTENT: GET_MAJOR_VERSION_FOR_CONTENT(),
+      }).then(() => {
+        return launchpadVisit()
+      })
+    }
+
+    return launchpadVisit()
   })
 }
 
@@ -578,6 +647,9 @@ Cypress.Commands.add('remoteGraphQLInterceptBatched', remoteGraphQLInterceptBatc
 Cypress.Commands.add('findBrowsers', findBrowsers)
 Cypress.Commands.add('tabUntil', tabUntil)
 Cypress.Commands.add('validateExternalLink', { prevSubject: ['optional', 'element'] }, validateExternalLink)
+Cypress.Commands.add('mockStudioFullSnapshot', mockStudioFullSnapshot)
+Cypress.Commands.add('mockNodeCloudRequest', mockNodeCloudRequest)
+Cypress.Commands.add('mockNodeCloudStreamingRequest', mockNodeCloudStreamingRequest)
 
 installCustomPercyCommand({
   elementOverrides: {

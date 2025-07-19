@@ -183,13 +183,6 @@ describe('App: Settings', () => {
           href: 'https://on.cypress.io/experiments',
         })
 
-        cy.get('[data-cy="experiment-experimentalFetchPolyfill"]').within(() => {
-          cy.validateExternalLink({
-            name: 'cy.intercept()',
-            href: 'https://on.cypress.io/intercept',
-          })
-        })
-
         cy.get('[data-cy="experiment-experimentalInteractiveRunEvents"]').within(() => {
           cy.validateExternalLink({
             name: 'before:run',
@@ -218,6 +211,13 @@ describe('App: Settings', () => {
             href: 'https://github.com/cypress-io/cypress/issues/5273',
           })
         })
+      })
+
+      // makes sure all experiments have an i18n header and description available.
+      // @see https://github.com/cypress-io/cypress/issues/30126.
+      cy.get('[data-cy="settings-experiments"] [role="row"][data-cy^="experiment-"]').each((experimentRow) => {
+        cy.wrap(experimentRow[0]).get('[data-cy="experimentName"]').should('not.contain.text', 'settingsPage.')
+        cy.wrap(experimentRow[0]).get('[data-cy="experimentDescription"]').should('not.contain.text', 'settingsPage.')
       })
     })
 

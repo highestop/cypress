@@ -4,7 +4,8 @@ import dedent from 'dedent'
 
 type ProjectDirs = typeof fixtureDirs
 
-const VITE_REACT: ProjectDirs[number][] = ['vite2.8.6-react', 'vite2.9.1-react']
+// These versions should reflect the latest versions of each major version of Vite - update as needed
+const VITE_REACT: ProjectDirs[number][] = ['vite4.5.12-react', 'vite5.4.18-react', 'vite6.2.5-react']
 
 // Add to this list to focus on a particular permutation
 const ONLY_PROJECTS: ProjectDirs[number][] = []

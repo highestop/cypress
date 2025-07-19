@@ -12,6 +12,8 @@
     "../frontend-shared/cypress/**/*.ts"
   ],
   "compilerOptions": {
+    // needed for mobx
+    "useDefineForClassFields": true,
     "noImplicitThis": true,
     "paths": {
       "@cy/i18n": ["../frontend-shared/src/locales/i18n"],
@@ -20,7 +22,7 @@
       "@cy/store/*": ["../frontend-shared/src/store/*"],
       "@packages/*": ["../*"]
     },
-    "allowJs": true,
+    "target": "ES2022",
     "types": [
       "cypress", 
       "cypress-real-events", 

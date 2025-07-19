@@ -2,7 +2,7 @@ import { action } from 'mobx'
 import { observer } from 'mobx-react'
 import React from 'react'
 
-import { AppState } from '../lib/app-state'
+import type { AppState } from '../lib/app-state'
 import defaultEvents, { Events } from '../lib/events'
 import Switch from '../lib/switch'
 
@@ -11,7 +11,7 @@ interface Props {
   appState: AppState
 }
 
-const TestingPreferences = observer(({
+const TestingPreferences: React.FC<Props> = observer(({
   events = defaultEvents,
   appState,
 }: Props) => {
@@ -42,5 +42,7 @@ const TestingPreferences = observer(({
     </div>
   )
 })
+
+TestingPreferences.displayName = 'TestingPreferences'
 
 export default TestingPreferences

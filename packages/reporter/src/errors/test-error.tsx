@@ -1,5 +1,5 @@
 import _ from 'lodash'
-import React, { MouseEvent } from 'react'
+import React, { MouseEvent, useCallback } from 'react'
 import cs from 'classnames'
 import { observer } from 'mobx-react'
 import Markdown from 'markdown-it'
@@ -11,7 +11,7 @@ import ErrorStack from '../errors/error-stack'
 import events from '../lib/events'
 import FlashOnClick from '../lib/flash-on-click'
 import { onEnterOrSpace } from '../lib/util'
-import Err from './err-model'
+import type Err from './err-model'
 import { formattedMessage } from '../commands/command'
 
 import WarningIcon from '@packages/frontend-shared/src/assets/icons/warning_x8.svg'
@@ -44,11 +44,14 @@ interface TestErrorProps {
   testId?: string
   commandId?: number
   // the command group level to nest the recovered in-test error
-  groupLevel: number
+  groupLevel?: number
 }
 
-const TestError = (props: TestErrorProps) => {
-  const { err } = props
+const TestError: React.FC<TestErrorProps> = ({ err, groupLevel = 0, testId, commandId }) => {
+  const _onPrint = useCallback((e: MouseEvent) => {
+    e.stopPropagation()
+    events.emit('show:error', { err, groupLevel, testId, commandId })
+  }, [err, groupLevel, testId, commandId])
 
   if (!err || !err.displayMessage) return null
 
@@ -56,23 +59,13 @@ const TestError = (props: TestErrorProps) => {
 
   md.enable(['backticks', 'emphasis', 'escape'])
 
-  const onPrint = () => {
-    events.emit('show:error', props)
-  }
-
-  const _onPrintClick = (e: MouseEvent) => {
-    e.stopPropagation()
-
-    onPrint()
-  }
-
   const { codeFrame } = err
 
   const groupPlaceholder: Array<JSX.Element> = []
 
   if (err.isRecovered) {
     // cap the group nesting to 5 levels to keep the log text legible
-    for (let i = 0; i < props.groupLevel; i++) {
+    for (let i = 0; i < groupLevel; i++) {
       groupPlaceholder.push(<span key={`${err.name}-err-${i}`} className='err-group-block' />)
     }
   }
@@ -81,7 +74,9 @@ const TestError = (props: TestErrorProps) => {
     <div className={cs('runnable-err', { 'recovered-test-err': err.isRecovered })}>
       <div className='runnable-err-header'>
         {groupPlaceholder}
-        <WarningIcon />
+        <div className={cs('runnable-err-icon', { 'runnable-err-icon-group': groupPlaceholder.length > 0 })}>
+          <WarningIcon />
+        </div>
         <div className='runnable-err-name'>
           {err.name}
         </div>
@@ -99,10 +94,10 @@ const TestError = (props: TestErrorProps) => {
             header='View stack trace'
             headerClass='runnable-err-stack-expander'
             headerExtras={
-              <FlashOnClick onClick={_onPrintClick} message="Printed output to your console">
+              <FlashOnClick onClick={_onPrint} message="Printed output to your console">
                 <div
                   className="runnable-err-print"
-                  onKeyPress={onEnterOrSpace(onPrint)}
+                  onKeyDown={onEnterOrSpace(() => events.emit('show:error', { err, groupLevel, testId, commandId }))}
                   role='button'
                   tabIndex={0}
                 >
@@ -121,8 +116,6 @@ const TestError = (props: TestErrorProps) => {
   )
 }
 
-TestError.defaultProps = {
-  groupLevel: 0,
-}
+TestError.displayName = 'TestError'
 
 export default observer(TestError)

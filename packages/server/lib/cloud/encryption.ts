@@ -1,9 +1,10 @@
-import crypto from 'crypto'
+import crypto, { BinaryLike } from 'crypto'
 import { TextEncoder, promisify } from 'util'
 import { generalDecrypt, GeneralJWE } from 'jose'
 import base64Url from 'base64url'
 import type { CypressRequestOptions } from './api'
 import { deflateRaw as deflateRawCb } from 'zlib'
+import fs from 'fs'
 
 const deflateRaw = promisify(deflateRawCb)
 
@@ -36,12 +37,31 @@ export interface EncryptRequestData {
   secretKey: crypto.KeyObject
 }
 
-export function verifySignature (body: string, signature: string, publicKey?: crypto.KeyObject) {
+export function verifySignature (body: BinaryLike, signature: string, publicKey?: crypto.KeyObject) {
   const verify = crypto.createVerify('SHA256')
 
   verify.update(body)
 
-  return verify.verify(publicKey || getPublicKey(), Buffer.from(signature, 'base64'))
+  return verify.verify(publicKey || getPublicKey(), signature, 'base64')
+}
+
+export function verifySignatureFromFile (file: string, signature: string, publicKey?: crypto.KeyObject): Promise<boolean> {
+  const verify = crypto.createVerify('SHA256')
+
+  const stream = fs.createReadStream(file)
+
+  stream.on('data', (chunk: crypto.BinaryLike) => {
+    verify.update(chunk)
+  })
+
+  return new Promise<boolean>((resolve, reject) => {
+    stream.on('end', () => {
+      verify.end()
+      resolve(verify.verify(publicKey || getPublicKey(), signature, 'base64'))
+    })
+
+    stream.on('error', reject)
+  })
 }
 
 // Implements the https://www.rfc-editor.org/rfc/rfc7516 spec
@@ -49,12 +69,14 @@ export function verifySignature (body: string, signature: string, publicKey?: cr
 // in the jose library (https://github.com/panva/jose/blob/main/src/jwe/general/encrypt.ts),
 // but allows us to keep track of the encrypting key locally, to optionally use it for decryption
 // of encrypted payloads coming back in the response body.
-export async function encryptRequest (params: CypressRequestOptions, publicKey?: crypto.KeyObject): Promise<EncryptRequestData> {
-  const key = publicKey || getPublicKey()
+export async function encryptRequest (params: Pick<CypressRequestOptions, 'body'>, options: {
+  publicKey?: crypto.KeyObject
+  secretKey?: crypto.KeyObject
+} = {}): Promise<EncryptRequestData> {
+  const { publicKey = getPublicKey(), secretKey = crypto.createSecretKey(crypto.randomBytes(32)) } = options
   const header = base64Url(JSON.stringify({ alg: 'RSA-OAEP', enc: 'A256GCM', zip: 'DEF' }))
   const deflated = await deflateRaw(JSON.stringify(params.body))
   const iv = crypto.randomBytes(12)
-  const secretKey = crypto.createSecretKey(crypto.randomBytes(32))
   const cipher = crypto.createCipheriv('aes-256-gcm', secretKey, iv, { authTagLength: 16 })
   const aad = new TextEncoder().encode(header)
 
@@ -75,7 +97,7 @@ export async function encryptRequest (params: CypressRequestOptions, publicKey?:
       ciphertext: base64Url(encrypted),
       recipients: [
         {
-          encrypted_key: base64Url(crypto.publicEncrypt(key, secretKey.export())),
+          encrypted_key: base64Url(crypto.publicEncrypt(publicKey, secretKey.export())),
         },
       ],
       tag: base64Url(cipher.getAuthTag()),

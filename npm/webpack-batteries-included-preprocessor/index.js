@@ -1,11 +1,13 @@
 const path = require('path')
-const fs = require('fs-extra')
-const JSON5 = require('json5')
 const webpack = require('webpack')
 const Debug = require('debug')
 const webpackPreprocessor = require('@cypress/webpack-preprocessor')
+const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin
 
 const debug = Debug('cypress:webpack-batteries-included-preprocessor')
+const WBADebugNamespace = 'cypress-verbose:webpack-batteries-included-preprocessor:bundle-analyzer'
+
+const typescriptExtensionRegex = /\.m?tsx?$/
 
 const hasTsLoader = (rules) => {
   return rules.some((rule) => {
@@ -15,38 +17,6 @@ const hasTsLoader = (rules) => {
       return use.loader && use.loader.includes('ts-loader')
     })
   })
-}
-
-const getTSCompilerOptionsForUser = (configFilePath) => {
-  const compilerOptions = {
-    sourceMap: false,
-    inlineSourceMap: true,
-    inlineSources: true,
-    downlevelIteration: true,
-  }
-
-  if (!configFilePath) {
-    return compilerOptions
-  }
-
-  try {
-    // If possible, try to read the user's tsconfig.json and see if sourceMap is configured
-    // eslint-disable-next-line no-restricted-syntax
-    const tsconfigJSON = fs.readFileSync(configFilePath, 'utf8')
-    // file might have trailing commas, new lines, etc. JSON5 can parse those correctly
-    const parsedJSON = JSON5.parse(tsconfigJSON)
-
-    // if the user has sourceMap's configured, set the option to true and turn off inlineSourceMaps
-    if (parsedJSON?.compilerOptions?.sourceMap) {
-      compilerOptions.sourceMap = true
-      compilerOptions.inlineSourceMap = false
-      compilerOptions.inlineSources = false
-    }
-  } catch (e) {
-    debug(`error in getTSCompilerOptionsForUser. Returning default...`, e)
-  } finally {
-    return compilerOptions
-  }
 }
 
 const addTypeScriptConfig = (file, options) => {
@@ -60,24 +30,30 @@ const addTypeScriptConfig = (file, options) => {
   if (!rules || !Array.isArray(rules)) return options
 
   // if we find ts-loader configured, don't add it again
-  if (hasTsLoader(rules)) return options
+  if (hasTsLoader(rules)) {
+    debug('ts-loader already configured, not adding again')
+
+    return options
+  }
 
   const TsconfigPathsPlugin = require('tsconfig-paths-webpack-plugin')
   // node will try to load a projects tsconfig.json instead of the node
-  // package using require('tsconfig'), so we alias it as 'tsconfig-aliased-for-wbip'
-  const configFile = require('tsconfig-aliased-for-wbip').findSync(path.dirname(file.filePath))
 
-  const compilerOptions = getTSCompilerOptionsForUser(configFile)
+  const getTsConfig = require('get-tsconfig')
+
+  // returns null if tsconfig cannot be found in the path/parent hierarchy
+  const configFile = getTsConfig.getTsconfig(file.filePath)
+
+  configFile ? debug(`found user tsconfig.json at ${configFile?.path} with compilerOptions: ${JSON.stringify(configFile?.config?.compilerOptions)}`) : debug('no user tsconfig.json found')
 
   webpackOptions.module.rules.push({
-    test: /\.tsx?$/,
+    test: typescriptExtensionRegex,
     exclude: [/node_modules/],
     use: [
       {
         loader: require.resolve('ts-loader'),
         options: {
           compiler: options.typescript,
-          compilerOptions,
           logLevel: 'error',
           silent: true,
           transpileOnly: true,
@@ -87,8 +63,9 @@ const addTypeScriptConfig = (file, options) => {
   })
 
   webpackOptions.resolve.extensions = webpackOptions.resolve.extensions.concat(['.ts', '.tsx'])
+  webpackOptions.resolve.extensionAlias = webpackOptions.resolve.extensionAlias || { '.js': ['.ts', '.js'], '.mjs': ['.mts', '.mjs'] }
   webpackOptions.resolve.plugins = [new TsconfigPathsPlugin({
-    configFile,
+    configFile: configFile?.path,
     silent: true,
   })]
 
@@ -164,6 +141,10 @@ const getDefaultWebpackOptions = () => {
         // @see https://github.com/cypress-io/cypress/issues/27947.
         process: require.resolve('process/browser.js'),
       }),
+      // If the user is trying to debug their bundle, we'll add the BundleAnalyzerPlugin
+      // to see the size of the support file (first bundle when running `cypress open`)
+      // and spec files (subsequent bundles when running `cypress open`)
+      ...(Debug.enabled(WBADebugNamespace) ? [new BundleAnalyzerPlugin()] : []),
     ],
     resolve: {
       extensions: ['.js', '.json', '.jsx', '.mjs', '.coffee'],
@@ -209,8 +190,6 @@ const getDefaultWebpackOptions = () => {
     },
   }
 }
-
-const typescriptExtensionRegex = /\.tsx?$/
 
 const preprocessor = (options = {}) => {
   return (file) => {

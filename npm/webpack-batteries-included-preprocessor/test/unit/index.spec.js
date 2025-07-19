@@ -2,6 +2,7 @@ const { expect } = require('chai')
 const decache = require('decache')
 const mock = require('mock-require')
 const sinon = require('sinon')
+const Debug = require('debug')
 
 describe('webpack-batteries-included-preprocessor', () => {
   beforeEach(() => {
@@ -29,38 +30,40 @@ describe('webpack-batteries-included-preprocessor', () => {
       expect(result.module.rules).to.have.length(4)
       expect(result.module.rules[3].use[0].loader).to.include('ts-loader')
     })
+
+    it('adds the BundleAnalyzerPlugin if the user is trying to debug their bundle', () => {
+      Debug.enable('cypress-verbose:webpack-batteries-included-preprocessor:bundle-analyzer')
+
+      // since debug needs to be hydrated before requiring the preprocessor, we need to decache
+      // and require again
+      decache('../../index')
+      preprocessor = require('../../index')
+      const result = preprocessor.getFullWebpackOptions('file/path', 'typescript/path')
+
+      expect(result.plugins).to.have.length(2)
+      expect(result.plugins[1].constructor.name).to.equal('BundleAnalyzerPlugin')
+      Debug.disable()
+    })
   })
 
   context('#getTSCompilerOptionsForUser', () => {
-    const mockTsconfigPath = '/path/to/tsconfig.json'
-    let readFileTsConfigMock
+    let getTsConfigMock
     let preprocessor
-    let readFileTsConfigStub
     let webpackOptions
 
     beforeEach(() => {
       const tsConfigPathSpy = sinon.spy()
-
-      readFileTsConfigMock = () => {
-        throw new Error('Could not read file!')
-      }
 
       mock('tsconfig-paths-webpack-plugin', tsConfigPathSpy)
       mock('@cypress/webpack-preprocessor', (options) => {
         return (file) => undefined
       })
 
-      const tsconfig = require('tsconfig-aliased-for-wbip')
+      const getTsConfig = require('get-tsconfig')
 
-      sinon.stub(tsconfig, 'findSync').callsFake(() => mockTsconfigPath)
+      getTsConfigMock = sinon.stub(getTsConfig, 'getTsconfig')
 
       preprocessor = require('../../index')
-
-      const fs = require('fs-extra')
-
-      readFileTsConfigStub = sinon.stub(fs, 'readFileSync').withArgs(mockTsconfigPath, 'utf8').callsFake(() => {
-        return readFileTsConfigMock()
-      })
 
       webpackOptions = {
         module: {
@@ -74,12 +77,14 @@ describe('webpack-batteries-included-preprocessor', () => {
     })
 
     afterEach(() => {
-    // Remove the mock
+      // Remove the mock
       mock.stop('tsconfig-paths-webpack-plugin')
       mock.stop('@cypress/webpack-preprocessor')
     })
 
-    it('always returns compilerOptions even if there is an error discovering the user\'s tsconfig.json', () => {
+    it('always returns loader options even if there is an error discovering the user\'s tsconfig.json', () => {
+      getTsConfigMock.returns(null)
+
       const preprocessorCB = preprocessor({
         typescript: true,
         webpackOptions,
@@ -90,7 +95,6 @@ describe('webpack-batteries-included-preprocessor', () => {
         outputPath: '.js',
       })
 
-      sinon.assert.calledOnce(readFileTsConfigStub)
       const tsLoader = webpackOptions.module.rules[0].use[0]
 
       expect(tsLoader.loader).to.contain('ts-loader')
@@ -100,80 +104,8 @@ describe('webpack-batteries-included-preprocessor', () => {
       expect(tsLoader.options.silent).to.be.true
       expect(tsLoader.options.transpileOnly).to.be.true
 
-      const compilerOptions = tsLoader.options.compilerOptions
-
-      expect(compilerOptions.downlevelIteration).to.be.true
-      expect(compilerOptions.inlineSources).to.be.true
-      expect(compilerOptions.inlineSources).to.be.true
-      expect(compilerOptions.sourceMap).to.be.false
-    })
-
-    it('turns inlineSourceMaps on by default even if none are configured', () => {
-      // make json5 compat schema
-      const mockTsConfig = `{
-          "compilerOptions": {
-            "sourceMap": false,
-            "someConfigWithTrailingComma": true,
-          }
-        }`
-
-      readFileTsConfigMock = () => mockTsConfig
-
-      const preprocessorCB = preprocessor({
-        typescript: true,
-        webpackOptions,
-      })
-
-      preprocessorCB({
-        filePath: 'foo.ts',
-        outputPath: '.js',
-      })
-
-      sinon.assert.calledOnce(readFileTsConfigStub)
-      const tsLoader = webpackOptions.module.rules[0].use[0]
-
-      expect(tsLoader.loader).to.contain('ts-loader')
-
-      const compilerOptions = tsLoader.options.compilerOptions
-
-      expect(compilerOptions.downlevelIteration).to.be.true
-      expect(compilerOptions.inlineSources).to.be.true
-      expect(compilerOptions.inlineSources).to.be.true
-      expect(compilerOptions.sourceMap).to.be.false
-    })
-
-    it('turns on sourceMaps and disables inlineSourceMap and inlineSources if the sourceMap configuration option is set by the user', () => {
-      // make json5 compat schema
-      const mockTsConfig = `{
-          "compilerOptions": {
-            "sourceMap": true,
-            "someConfigWithTrailingComma": true,
-          }
-        }`
-
-      readFileTsConfigMock = () => mockTsConfig
-
-      const preprocessorCB = preprocessor({
-        typescript: true,
-        webpackOptions,
-      })
-
-      preprocessorCB({
-        filePath: 'foo.ts',
-        outputPath: '.js',
-      })
-
-      sinon.assert.calledOnce(readFileTsConfigStub)
-      const tsLoader = webpackOptions.module.rules[0].use[0]
-
-      expect(tsLoader.loader).to.contain('ts-loader')
-
-      const compilerOptions = tsLoader.options.compilerOptions
-
-      expect(compilerOptions.downlevelIteration).to.be.true
-      expect(compilerOptions.inlineSources).to.be.false
-      expect(compilerOptions.inlineSources).to.be.false
-      expect(compilerOptions.sourceMap).to.be.true
+      // compilerOptions are set by `@cypress/webpack-preprocessor` if ts-loader is present
+      expect(tsLoader.options.compilerOptions).to.be.undefined
     })
   })
 })

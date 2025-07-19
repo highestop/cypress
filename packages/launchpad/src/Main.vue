@@ -7,19 +7,8 @@
       v-if="shouldShowWelcome"
       class="pt-[64px]"
       role="main"
-      :video-html="videoHtml"
       @clearLandingPage="handleClearLandingPage"
-    >
-      <template
-        v-if="videoHtml"
-        #video
-      >
-        <div
-          class="major-version-welcome-video"
-          v-html="videoHtml"
-        />
-      </template>
-    </MajorVersionWelcome>
+    />
     <main
       v-else
       class="px-[24px] pt-[86px] pb-[24px]"
@@ -114,7 +103,7 @@ import OpenBrowser from './setup/OpenBrowser.vue'
 import LoginConnectModals from '@cy/gql-components/LoginConnectModals.vue'
 import CloudViewerAndProject from '@cy/gql-components/CloudViewerAndProject.vue'
 import { usePromptManager } from '@cy/gql-components/composables/usePromptManager'
-import { MAJOR_VERSION_FOR_CONTENT } from '@packages/types'
+import { GET_MAJOR_VERSION_FOR_CONTENT } from '@packages/types'
 
 const { setMajorVersionWelcomeDismissed } = usePromptManager()
 const { t } = useI18n()
@@ -132,6 +121,7 @@ fragment MainLaunchpadQueryData on Query {
     preferences {
       majorVersionWelcomeDismissed
       wasBrowserSetInCLI
+      shouldLaunchBrowserFromOpenBrowser
     }
   }
   currentProject {
@@ -147,7 +137,6 @@ fragment MainLaunchpadQueryData on Query {
       id
     }
   }
-  videoEmbedHtml
   isGlobalMode
   ...GlobalPage
   ...ScaffoldedFiles
@@ -245,19 +234,19 @@ watch(
 )
 
 function handleClearLandingPage () {
-  setMajorVersionWelcomeDismissed(MAJOR_VERSION_FOR_CONTENT)
-  const wasBrowserSetInCLI = query.data?.value?.localSettings.preferences?.wasBrowserSetInCLI
+  setMajorVersionWelcomeDismissed(GET_MAJOR_VERSION_FOR_CONTENT())
+  const shouldLaunchBrowser = query.data?.value?.localSettings?.preferences?.shouldLaunchBrowserFromOpenBrowser
 
   const currentTestingType = currentProject.value?.currentTestingType
 
-  if (wasBrowserSetInCLI && currentTestingType) {
+  if (shouldLaunchBrowser && currentTestingType) {
     launchProject.executeMutation({ testingType: currentTestingType })
   }
 }
 
 const shouldShowWelcome = computed(() => {
   if (query.data.value) {
-    const hasThisVersionBeenSeen = query.data.value?.localSettings?.preferences?.majorVersionWelcomeDismissed?.[MAJOR_VERSION_FOR_CONTENT]
+    const hasThisVersionBeenSeen = query.data.value?.localSettings?.preferences?.majorVersionWelcomeDismissed?.[GET_MAJOR_VERSION_FOR_CONTENT()]
     const wasBrowserSetInCLI = query.data?.value?.localSettings.preferences?.wasBrowserSetInCLI
     const currentTestingType = currentProject.value?.currentTestingType
 
@@ -276,8 +265,6 @@ const shouldShowWelcome = computed(() => {
 
   return false
 })
-
-const videoHtml = computed(() => query.data.value?.videoEmbedHtml || '')
 
 </script>
 <style scoped lang="scss">

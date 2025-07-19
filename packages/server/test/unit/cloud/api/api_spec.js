@@ -14,7 +14,7 @@ const {
 } = require('@packages/network')
 const pkg = require('@packages/root')
 const api = require('../../../../lib/cloud/api').default
-const cache = require('../../../../lib/cache')
+const cache = require('../../../../lib/cache').cache
 const errors = require('../../../../lib/errors')
 const machineId = require('../../../../lib/cloud/machine_id')
 const Promise = require('bluebird')
@@ -36,6 +36,8 @@ const makeError = (details = {}) => {
   return _.extend(new Error(details.message || 'Some error'), details)
 }
 
+const OS_PLATFORM = 'linux'
+
 const encryptRequest = encryption.encryptRequest
 
 const decryptReqBodyAndRespond = ({ reqBody, resBody }, fn) => {
@@ -53,7 +55,7 @@ const decryptReqBodyAndRespond = ({ reqBody, resBody }, fn) => {
       expect(params.body).to.deep.eq(reqBody)
     }
 
-    const { secretKey, jwe } = await encryptRequest(params, publicKey)
+    const { secretKey, jwe } = await encryptRequest(params, { publicKey })
 
     if (fn) {
       encryption.encryptRequest.restore()
@@ -91,7 +93,7 @@ const decryptReqBodyAndRespond = ({ reqBody, resBody }, fn) => {
 const preflightNock = (baseUrl) => {
   return nock(baseUrl)
   .matchHeader('x-route-version', '1')
-  .matchHeader('x-os-name', 'linux')
+  .matchHeader('x-os-name', OS_PLATFORM)
   .matchHeader('x-cypress-version', pkg.version)
   .post('/preflight')
 }
@@ -114,7 +116,7 @@ describe('lib/cloud/api', () => {
     .reply(200, AUTH_URLS)
 
     api.clearCache()
-    sinon.stub(os, 'platform').returns('linux')
+    sinon.stub(os, 'platform').returns(OS_PLATFORM)
 
     if (this.oldEnv) {
       process.env = this.oldEnv
@@ -133,6 +135,7 @@ describe('lib/cloud/api', () => {
 
   afterEach(() => {
     api.resetPreflightResult()
+    sinon.restore()
   })
 
   context('.rp', () => {
@@ -195,7 +198,7 @@ describe('lib/cloud/api', () => {
   context('.ping', () => {
     it('GET /ping', () => {
       nock(API_BASEURL)
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .get('/ping')
       .reply(200, 'OK')
@@ -216,21 +219,24 @@ describe('lib/cloud/api', () => {
       return api.ping()
       .then(() => {
         throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+      })
+      .catch((err) => {
+        expect(err).to.have.property('isApiError', true)
       })
     })
   })
 
   context('.sendPreflight', () => {
     let prodApi
+    let originalCypressConfigEnv = process.env.CYPRESS_CONFIG_ENV
+    let originalCypressAPIUrl = process.env.CYPRESS_API_URL
 
     beforeEach(function () {
       this.timeout(30000)
 
       nock.cleanAll()
       sinon.restore()
-      sinon.stub(os, 'platform').returns('linux')
+      sinon.stub(os, 'platform').returns(OS_PLATFORM)
 
       process.env.CYPRESS_CONFIG_ENV = 'production'
       process.env.CYPRESS_API_URL = 'https://some.server.com'
@@ -241,6 +247,22 @@ describe('lib/cloud/api', () => {
         }, () => {
           require('../../../../lib/cloud/encryption')
         }, module)
+      }
+
+      prodApi.resetPreflightResult()
+    })
+
+    afterEach(() => {
+      if (originalCypressConfigEnv) {
+        process.env.CYPRESS_CONFIG_ENV = originalCypressConfigEnv
+      } else {
+        delete process.env.CYPRESS_CONFIG_ENV
+      }
+
+      if (originalCypressAPIUrl) {
+        process.env.CYPRESS_API_URL = originalCypressAPIUrl
+      } else {
+        delete process.env.CYPRESS_API_URL
       }
     })
 
@@ -320,12 +342,75 @@ describe('lib/cloud/api', () => {
       })
     })
 
-    it('sets timeout to 60 seconds', () => {
+    it('sets timeout to 5 seconds when no CYPRESS_INITIAL_PREFLIGHT_TIMEOUT env is set', () => {
       sinon.stub(api.rp, 'post').resolves({})
 
       return api.sendPreflight({})
       .then(() => {
-        expect(api.rp.post).to.be.calledWithMatch({ timeout: 60000 })
+        expect(api.rp.post).to.be.calledWithMatch({ timeout: 5000 })
+      })
+    })
+
+    describe('when CYPRESS_INITIAL_PREFLIGHT_TIMEOUT env is set to a negative number', () => {
+      const configuredTimeout = -1
+      let prevEnv
+
+      beforeEach(() => {
+        prevEnv = process.env.CYPRESS_INITIAL_PREFLIGHT_TIMEOUT
+        process.env.CYPRESS_INITIAL_PREFLIGHT_TIMEOUT = configuredTimeout
+      })
+
+      afterEach(() => {
+        process.env.CYPRESS_INITIAL_PREFLIGHT_TIMEOUT = prevEnv
+      })
+
+      it('skips the no-agent preflight request', () => {
+        preflightNock(API_PROD_PROXY_BASEURL)
+        .replyWithError('should not be called')
+
+        preflightNock(API_PROD_BASEURL)
+        .reply(200, decryptReqBodyAndRespond({
+          reqBody: {
+            envUrl: 'https://some.server.com',
+            dependencies: {},
+            errors: [],
+            apiUrl: 'https://api.cypress.io/',
+            projectId: 'abc123',
+          },
+          resBody: {
+            encrypt: true,
+            apiUrl: `${API_PROD_BASEURL}/`,
+          },
+        }))
+
+        return prodApi.sendPreflight({ projectId: 'abc123' })
+        .then((ret) => {
+          expect(ret).to.deep.eq({ encrypt: true, apiUrl: `${API_PROD_BASEURL}/` })
+        })
+      })
+    })
+
+    describe('when CYPRESS_INITIAL_PREFLIGHT_TIMEOUT env is set to a positive number', () => {
+      const configuredTimeout = 10000
+      let prevEnv
+
+      beforeEach(() => {
+        prevEnv = process.env.CYPRESS_INITIAL_PREFLIGHT_TIMEOUT
+        process.env.CYPRESS_INITIAL_PREFLIGHT_TIMEOUT = configuredTimeout
+      })
+
+      afterEach(() => {
+        process.env.CYPRESS_INITIAL_PREFLIGHT_TIMEOUT = prevEnv
+        api.rp.post.restore()
+      })
+
+      it('makes the initial request with the number set in the env', () => {
+        sinon.stub(api.rp, 'post').resolves({})
+
+        return api.sendPreflight({})
+        .then(() => {
+          expect(api.rp.post).to.be.calledWithMatch({ timeout: configuredTimeout })
+        })
       })
     })
 
@@ -432,10 +517,8 @@ describe('lib/cloud/api', () => {
           scopeApi.done()
 
           expect(err).not.to.have.property('statusCode')
-          expect(err).to.contain({
-            name: 'DecryptionError',
-            message: 'JWE Recipients missing or incorrect type',
-          })
+          expect(err).to.have.property('name', 'DecryptionError')
+          expect(err).to.have.property('message', 'JWE Recipients missing or incorrect type')
         })
       })
 
@@ -455,10 +538,8 @@ describe('lib/cloud/api', () => {
           scopeApi.done()
 
           expect(err).not.to.have.property('statusCode')
-          expect(err).to.contain({
-            name: 'DecryptionError',
-            message: 'General JWE must be an object',
-          })
+          expect(err).to.have.property('name', 'DecryptionError')
+          expect(err).to.have.property('message', 'General JWE must be an object')
         })
       })
 
@@ -478,10 +559,8 @@ describe('lib/cloud/api', () => {
           scopeApi.done()
 
           expect(err).not.to.have.property('statusCode')
-          expect(err).to.contain({
-            name: 'DecryptionError',
-            message: 'General JWE must be an object',
-          })
+          expect(err).to.have.property('name', 'DecryptionError')
+          expect(err).to.have.property('message', 'General JWE must be an object')
         })
       })
 
@@ -530,7 +609,7 @@ describe('lib/cloud/api', () => {
   context('.createRun', () => {
     beforeEach(function () {
       this.protocolManager = {
-        setupProtocol: sinon.stub(),
+        prepareAndSetupProtocol: sinon.stub(),
       }
 
       this.buildProps = {
@@ -573,7 +652,7 @@ describe('lib/cloud/api', () => {
 
       nock(API_BASEURL)
       .matchHeader('x-route-version', '4')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/runs', this.buildProps)
       .reply(200, {
@@ -591,6 +670,19 @@ describe('lib/cloud/api', () => {
         get protocolManager () {
           return protocolManager
         },
+        getConfig: () => {
+          return {
+            port: 1234,
+            devServerPublicPathRoute: '/dev-server',
+            proxyUrl: 'http://localhost:1234',
+            namespace: '__cypress',
+          }
+        },
+        get configDebugData () {
+          return {
+            filePreprocessorHandlerText: 'function () {}',
+          }
+        },
       }
 
       return api.createRun({
@@ -605,9 +697,29 @@ describe('lib/cloud/api', () => {
           },
         })
 
-        expect(this.protocolManager.setupProtocol).to.be.calledWith(
+        expect(this.protocolManager.prepareAndSetupProtocol).to.be.calledWith(
           PROTOCOL_STUB_VALID.value,
-          { runId: 'new-run-id-123', testingType: 'e2e', mountVersion: 2 },
+          {
+            runId: 'new-run-id-123',
+            testingType: 'e2e',
+            mountVersion: 2,
+            projectId: 'id-123',
+            cloudApi: {
+              url: 'http://localhost:1234/',
+              retryWithBackoff: api.retryWithBackoff,
+              requestPromise: api.rp,
+            },
+            projectConfig: {
+              port: 1234,
+              devServerPublicPathRoute: '/dev-server',
+              proxyUrl: 'http://localhost:1234',
+              namespace: '__cypress',
+            },
+            debugData: {
+              filePreprocessorHandlerText: 'function () {}',
+            },
+            mode: 'record',
+          },
         )
       })
     })
@@ -615,7 +727,7 @@ describe('lib/cloud/api', () => {
     it('POST /runs + returns runId with encryption', function () {
       nock.cleanAll()
       sinon.restore()
-      sinon.stub(os, 'platform').returns('linux')
+      sinon.stub(os, 'platform').returns(OS_PLATFORM)
 
       nock(API_BASEURL)
       .get('/capture-protocol/script/protocolStub.js')
@@ -634,7 +746,7 @@ describe('lib/cloud/api', () => {
         nock(API_BASEURL)
         .defaultReplyHeaders({ 'x-cypress-encrypted': 'true' })
         .matchHeader('x-route-version', '4')
-        .matchHeader('x-os-name', 'linux')
+        .matchHeader('x-os-name', OS_PLATFORM)
         .matchHeader('x-cypress-version', pkg.version)
         .post('/runs')
         .reply(200, decryptReqBodyAndRespond({
@@ -656,6 +768,17 @@ describe('lib/cloud/api', () => {
         get protocolManager () {
           return protocolManager
         },
+        getConfig: () => {
+          return {
+            port: 1234,
+            devServerPublicPathRoute: '/dev-server',
+            proxyUrl: 'http://localhost:1234',
+            namespace: '__cypress',
+          }
+        },
+        configDebugData: {
+          filePreprocessorHandlerText: 'function () {}',
+        },
       }
 
       return api.createRun({
@@ -670,14 +793,34 @@ describe('lib/cloud/api', () => {
           },
         })
 
-        expect(this.protocolManager.setupProtocol).to.be.calledWith(
+        expect(this.protocolManager.prepareAndSetupProtocol).to.be.calledWith(
           PROTOCOL_STUB_VALID.value,
-          { runId: 'new-run-id-123', testingType: 'e2e', mountVersion: 2 },
+          {
+            runId: 'new-run-id-123',
+            testingType: 'e2e',
+            mountVersion: 2,
+            projectId: 'id-123',
+            cloudApi: {
+              url: 'http://localhost:1234/',
+              retryWithBackoff: api.retryWithBackoff,
+              requestPromise: api.rp,
+            },
+            projectConfig: {
+              port: 1234,
+              devServerPublicPathRoute: '/dev-server',
+              proxyUrl: 'http://localhost:1234',
+              namespace: '__cypress',
+            },
+            debugData: {
+              filePreprocessorHandlerText: 'function () {}',
+            },
+            mode: 'record',
+          },
         )
       })
     })
 
-    it('POST /runs does not call setupProtocol with invalid signature', function () {
+    it('POST /runs does not call prepareAndSetupProtocol with invalid signature', function () {
       nock(API_BASEURL)
       .get('/capture-protocol/script/protocolStub.js')
       .reply(200, PROTOCOL_STUB_VALID.compressed, {
@@ -687,7 +830,7 @@ describe('lib/cloud/api', () => {
 
       nock(API_BASEURL)
       .matchHeader('x-route-version', '4')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/runs', this.buildProps)
       .reply(200, {
@@ -719,14 +862,14 @@ describe('lib/cloud/api', () => {
           },
         })
 
-        expect(this.protocolManager.setupProtocol).not.to.be.called
+        expect(this.protocolManager.prepareAndSetupProtocol).not.to.be.called
       })
     })
 
     it('POST /runs failure formatting', function () {
       nock(API_BASEURL)
       .matchHeader('x-route-version', '4')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/runs', this.buildProps)
       .reply(422, {
@@ -754,14 +897,14 @@ describe('lib/cloud/api', () => {
 }\
 `)
 
-        expect(this.protocolManager.setupProtocol).not.to.be.called
+        expect(this.protocolManager.prepareAndSetupProtocol).not.to.be.called
       })
     })
 
     it('handles timeouts', () => {
       nock(API_BASEURL)
       .matchHeader('x-route-version', '4')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/runs')
       .delayConnection(5000)
@@ -811,8 +954,8 @@ describe('lib/cloud/api', () => {
       .then(() => {
         throw new Error('should have thrown here')
       }).catch((err) => {
-        expect(err.isApiError).to.be.true
-        expect(this.protocolManager.setupProtocol).not.to.be.called
+        expect(err).to.have.property('isApiError', true)
+        expect(this.protocolManager.prepareAndSetupProtocol).not.to.be.called
       })
     })
 
@@ -826,122 +969,7 @@ describe('lib/cloud/api', () => {
         throw new Error('should have thrown here')
       })
       .catch((err) => {
-        expect(err.isApiError).to.be.true
-      })
-    })
-  })
-
-  context('.createInstance', () => {
-    beforeEach(function () {
-      Object.defineProperty(process.versions, 'chrome', {
-        value: '53',
-      })
-
-      this.createProps = {
-        runId: 'run-id-123',
-        spec: 'cypress/integration/app_spec.js',
-        groupId: 'groupId123',
-        machineId: 'machineId123',
-        platform: {},
-      }
-
-      this.postProps = _.omit(this.createProps, 'runId')
-    })
-
-    it('POSTs /runs/:id/instances', function () {
-      os.platform.returns('darwin')
-
-      nock(API_BASEURL)
-      .matchHeader('x-route-version', '5')
-      .matchHeader('x-cypress-run-id', this.createProps.runId)
-      .matchHeader('x-cypress-request-attempt', '0')
-      .matchHeader('x-os-name', 'darwin')
-      .matchHeader('x-cypress-version', pkg.version)
-      .post('/runs/run-id-123/instances', this.postProps)
-      .reply(200, {
-        instanceId: 'instance-id-123',
-      })
-
-      return api.createInstance(this.createProps)
-      .get('instanceId')
-      .then((instanceId) => {
-        expect(instanceId).to.eq('instance-id-123')
-      })
-    })
-
-    it('POST /runs/:id/instances failure formatting', () => {
-      nock(API_BASEURL)
-      .matchHeader('x-route-version', '5')
-      .matchHeader('x-os-name', 'linux')
-      .matchHeader('x-cypress-version', pkg.version)
-      .post('/runs/run-id-123/instances')
-      .reply(422, {
-        errors: {
-          tests: ['is required'],
-        },
-      })
-
-      return api.createInstance({ runId: 'run-id-123' })
-      .then(() => {
-        throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.message).to.eq(`\
-422
-
-{
-  "errors": {
-    "tests": [
-      "is required"
-    ]
-  }
-}\
-`)
-      })
-    })
-
-    it('handles timeouts', () => {
-      nock(API_BASEURL)
-      .matchHeader('x-route-version', '5')
-      .matchHeader('x-os-name', 'linux')
-      .matchHeader('x-cypress-version', pkg.version)
-      .post('/runs/run-id-123/instances')
-      .delayConnection(5000)
-      .reply(200, {})
-
-      return api.createInstance({
-        runId: 'run-id-123',
-        timeout: 100,
-      })
-      .then(() => {
-        throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.message).to.eq('Error: ESOCKETTIMEDOUT')
-      })
-    })
-
-    it('sets timeout to 60 seconds', () => {
-      sinon.stub(api.rp, 'post').resolves({
-        instanceId: 'instanceId123',
-      })
-
-      return api.createInstance({})
-      .then(() => {
-        expect(api.rp.post).to.be.calledWithMatch({ timeout: 60000 })
-      })
-    })
-
-    it('tags errors', function () {
-      nock(API_BASEURL)
-      .matchHeader('authorization', 'Bearer auth-token-123')
-      .matchHeader('accept-encoding', /gzip/)
-      .post('/runs/run-id-123/instances', this.postProps)
-      .reply(500, {})
-
-      return api.createInstance(this.createProps)
-      .then(() => {
-        throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+        expect(err).to.have.property('isApiError', true)
       })
     })
   })
@@ -964,7 +992,7 @@ describe('lib/cloud/api', () => {
       .matchHeader('x-route-version', '1')
       .matchHeader('x-cypress-run-id', this.props.runId)
       .matchHeader('x-cypress-request-attempt', '0')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/instances/instance-id-123/tests', this.bodyProps)
       .reply(200)
@@ -975,7 +1003,7 @@ describe('lib/cloud/api', () => {
     it('PUT /instances/:id failure formatting', () => {
       nock(API_BASEURL)
       .matchHeader('x-route-version', '1')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/instances/instance-id-123/tests')
       .reply(422, {
@@ -1005,7 +1033,7 @@ describe('lib/cloud/api', () => {
     it('handles timeouts', () => {
       nock(API_BASEURL)
       .matchHeader('x-route-version', '1')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/instances/instance-id-123/tests')
       .delayConnection(5000)
@@ -1042,8 +1070,9 @@ describe('lib/cloud/api', () => {
       return api.postInstanceTests(this.props)
       .then(() => {
         throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+      })
+      .catch((err) => {
+        expect(err).to.have.property('isApiError', true)
       })
     })
   })
@@ -1068,7 +1097,7 @@ describe('lib/cloud/api', () => {
       .matchHeader('x-route-version', '1')
       .matchHeader('x-cypress-run-id', this.updateProps.runId)
       .matchHeader('x-cypress-request-attempt', '0')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/instances/instance-id-123/results', this.postProps)
       .reply(200)
@@ -1079,7 +1108,7 @@ describe('lib/cloud/api', () => {
     it('PUT /instances/:id failure formatting', () => {
       nock(API_BASEURL)
       .matchHeader('x-route-version', '1')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/instances/instance-id-123/results')
       .reply(422, {
@@ -1109,7 +1138,7 @@ describe('lib/cloud/api', () => {
     it('handles timeouts', () => {
       nock(API_BASEURL)
       .matchHeader('x-route-version', '1')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .post('/instances/instance-id-123/results')
       .delayConnection(5000)
@@ -1146,8 +1175,9 @@ describe('lib/cloud/api', () => {
       return api.postInstanceResults(this.updateProps)
       .then(() => {
         throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+      })
+      .catch((err) => {
+        expect(err).to.have.property('isApiError', true)
       })
     })
   })
@@ -1155,7 +1185,7 @@ describe('lib/cloud/api', () => {
   context('.updateInstanceStdout', () => {
     it('PUTs /instances/:id/stdout', () => {
       nock(API_BASEURL)
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-run-id', 'run-id-123')
       .matchHeader('x-cypress-request-attempt', '0')
       .matchHeader('x-cypress-version', pkg.version)
@@ -1173,7 +1203,7 @@ describe('lib/cloud/api', () => {
 
     it('PUT /instances/:id/stdout failure formatting', () => {
       nock(API_BASEURL)
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .put('/instances/instance-id-123/stdout')
       .reply(422, {
@@ -1202,7 +1232,7 @@ describe('lib/cloud/api', () => {
 
     it('handles timeouts', () => {
       nock(API_BASEURL)
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .put('/instances/instance-id-123/stdout')
       .delayConnection(5000)
@@ -1243,8 +1273,9 @@ describe('lib/cloud/api', () => {
       })
       .then(() => {
         throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+      })
+      .catch((err) => {
+        expect(err).to.have.property('isApiError', true)
       })
     })
   })
@@ -1268,8 +1299,9 @@ describe('lib/cloud/api', () => {
       return api.getAuthUrls()
       .then(() => {
         throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+      })
+      .catch((err) => {
+        expect(err).to.have.property('isApiError', true)
       })
     })
 
@@ -1291,7 +1323,7 @@ describe('lib/cloud/api', () => {
 
     it('POSTs /logout', () => {
       nock(CLOUD_BASEURL)
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .matchHeader('x-machine-id', 'foo')
       .matchHeader('authorization', 'Bearer auth-token-123')
@@ -1304,7 +1336,7 @@ describe('lib/cloud/api', () => {
 
     it('tags errors', () => {
       nock(CLOUD_BASEURL)
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .matchHeader('x-machine-id', 'foo')
       .matchHeader('authorization', 'Bearer auth-token-123')
@@ -1315,8 +1347,9 @@ describe('lib/cloud/api', () => {
       return api.postLogout('auth-token-123')
       .then(() => {
         throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+      })
+      .catch((err) => {
+        expect(err).to.have.property('isApiError', true)
       })
     })
   })
@@ -1325,7 +1358,7 @@ describe('lib/cloud/api', () => {
     beforeEach(function () {
       this.setup = (body, authToken, delay = 0) => {
         return nock(API_BASEURL)
-        .matchHeader('x-os-name', 'linux')
+        .matchHeader('x-os-name', OS_PLATFORM)
         .matchHeader('x-cypress-version', pkg.version)
         .matchHeader('authorization', `Bearer ${authToken}`)
         .post('/exceptions', body)
@@ -1368,7 +1401,7 @@ describe('lib/cloud/api', () => {
 
     it('tags errors', () => {
       nock(API_BASEURL)
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .matchHeader('authorization', 'Bearer auth-token-123')
       .matchHeader('accept-encoding', /gzip/)
@@ -1378,8 +1411,9 @@ describe('lib/cloud/api', () => {
       return api.createCrashReport({ foo: 'bar' }, 'auth-token-123')
       .then(() => {
         throw new Error('should have thrown here')
-      }).catch((err) => {
-        expect(err.isApiError).to.be.true
+      })
+      .catch((err) => {
+        expect(err).to.have.property('isApiError', true)
       })
     })
   })
@@ -1554,7 +1588,7 @@ describe('lib/cloud/api', () => {
       .matchHeader('x-route-version', '1')
       .matchHeader('x-cypress-run-id', this.artifactOptions.runId)
       .matchHeader('x-cypress-request-attempt', '0')
-      .matchHeader('x-os-name', 'linux')
+      .matchHeader('x-os-name', OS_PLATFORM)
       .matchHeader('x-cypress-version', pkg.version)
       .put('/instances/instance-id-123/artifacts', {
         protocol: this.artifactProps.protocol,

@@ -145,6 +145,14 @@ const _normalizeArgExtensions = function (extPath, args, pluginExtensions, brows
     return arg.includes(LOAD_EXTENSION)
   })
 
+  if (loadExtension || pluginExtensions.length > 0) {
+    // @see https://github.com/cypress-io/cypress/issues/31702
+    if (Number(browser.majorVersion) >= 137 && browser.name === 'chrome') {
+      // eslint-disable-next-line no-console
+      errors.warning('CHROME_137_LOAD_EXTENSION_NOT_SUPPORTED')
+    }
+  }
+
   if (loadExtension) {
     args = _.without(args, loadExtension)
 
@@ -351,12 +359,12 @@ export = {
 
     // https://chromium.googlesource.com/chromium/src/+/da790f920bbc169a6805a4fb83b4c2ab09532d91
     // https://github.com/cypress-io/cypress/issues/1872
-    if (majorVersion >= CHROME_VERSION_INTRODUCING_PROXY_BYPASS_ON_LOOPBACK) {
+    if (Number(majorVersion) >= CHROME_VERSION_INTRODUCING_PROXY_BYPASS_ON_LOOPBACK) {
       args.push('--proxy-bypass-list=<-loopback>')
     }
 
     if (isHeadless) {
-      if (majorVersion >= CHROME_VERSION_INTRODUCING_HEADLESS_NEW) {
+      if (Number(majorVersion) >= CHROME_VERSION_INTRODUCING_HEADLESS_NEW) {
         args.push('--headless=new')
       } else {
         args.push('--headless')
@@ -394,7 +402,23 @@ export = {
 
     if (!browserCriClient?.currentlyAttachedTarget) throw new Error('Missing pageCriClient in connectProtocolToBrowser')
 
-    await options.protocolManager?.connectToBrowser(browserCriClient.currentlyAttachedTarget)
+    // Clone the target here so that we separate the protocol client and the main client.
+    // This allows us to close the protocol client independently of the main client
+    // which we do when we exit out of studio in open mode.
+    if (!browserCriClient.currentlyAttachedProtocolTarget) {
+      browserCriClient.currentlyAttachedProtocolTarget = await browserCriClient.currentlyAttachedTarget.clone()
+    }
+
+    await options.protocolManager?.connectToBrowser(browserCriClient.currentlyAttachedProtocolTarget)
+  },
+
+  async closeProtocolConnection () {
+    const browserCriClient = this._getBrowserCriClient()
+
+    if (browserCriClient?.currentlyAttachedProtocolTarget) {
+      await browserCriClient.currentlyAttachedProtocolTarget.close()
+      browserCriClient.currentlyAttachedProtocolTarget = undefined
+    }
   },
 
   async connectToNewSpec (browser: Browser, options: BrowserNewTabOpts, automation: Automation, socketServer?: CDPSocketServer) {
@@ -422,7 +446,7 @@ export = {
     debug('connecting to existing chrome instance with url and debugging port', { url: options.url, port })
     if (!options.onError) throw new Error('Missing onError in connectToExisting')
 
-    const browserCriClient = await BrowserCriClient.create({
+    browserCriClient = await BrowserCriClient.create({
       hosts: ['127.0.0.1'],
       port,
       browserName: browser.displayName,
@@ -445,7 +469,9 @@ export = {
     const browserCriClient = this._getBrowserCriClient()
 
     // Handle chrome tab crashes.
+    debug('attaching crash handler to target ', pageCriClient.targetId)
     pageCriClient.on('Target.targetCrashed', async (event) => {
+      debug('target crashed!', event)
       if (event.targetId !== browserCriClient?.currentlyAttachedTarget?.targetId) {
         return
       }

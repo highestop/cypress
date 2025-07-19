@@ -13,7 +13,6 @@ Thanks for taking the time to contribute! :smile:
 
 - [Report bugs](https://github.com/cypress-io/cypress/issues/new) by opening an issue.
 - [Request features](https://github.com/cypress-io/cypress/issues/new) by opening an issue.
-- [Help triage existing issues](#triaging-issues).
 - Write code to address an issue. We have some issues labeled as [`good first issue`](https://github.com/cypress-io/cypress/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) that are a good place to start. Please thoroughly read our [Writing Code guide](#writing-code).
 
 ## Table of Contents
@@ -26,7 +25,7 @@ Thanks for taking the time to contribute! :smile:
   - [Requirements](#requirements)
   - [Getting Started](#getting-started)
   - [Coding Style](#coding-style)
-  - [Adding links within code](#Adding-links-within-code)
+  - [Adding links within code](#adding-links-within-code)
   - [Tests](#tests)
   - [Packages](#packages)
 - [Committing Code](#committing-code)
@@ -34,11 +33,11 @@ Thanks for taking the time to contribute! :smile:
   - [Pull Requests](#pull-requests)
   - [Dependencies](#dependencies)
 - [Reviewing Code](#reviewing-code)
-  - [Some rules about Code Review](#Some-rules-about-Code-Review)
-  - [Steps to take during Code Review](#Steps-to-take-during-Code-Review)
-  - [Code Review Checklist](#Code-Review-Checklist)
-  - [Code Review of Dependency Updates](#Code-Review-of-Dependency-Updates)
-- [Deployment](#deployment)
+  - [Some rules about Code Review](#some-rules-about-code-review)
+  - [Steps to take during Code Review](#steps-to-take-during-code-review)
+  - [Code Review Checklist](#code-review-checklist)
+  - [Code Review of Dependency Updates](#code-review-of-dependency-updates)
+- [Releases](#releases)
 
 ## Code of Conduct
 
@@ -172,7 +171,7 @@ Here is a list of the packages in this repository with a short description, loca
 
  | Folder Name                           | Package Name            | Purpose                                                                      |
  | :------------------------------------ | :---------------------- | :--------------------------------------------------------------------------- |
- | [electron-mksnapshot](./electron-mksnapshot) | `electron-mksnapshot` | A rewrite of [electron/mksnapshot](https://github.com/electron/mksnapshot) to support multiple versions. |
+ | [electron-mksnapshot](./tooling/electron-mksnapshot) | `electron-mksnapshot` | A rewrite of [electron/mksnapshot](https://github.com/electron/mksnapshot) to support multiple versions. |
  | [packherd](./tooling/packherd)        | `packherd`              | Herds all dependencies reachable from an entry and packs them.               |
  | [v8-snapshot](./tooling/v8-snapshot)  | `v8-snapshot`           | Tool to create a snapshot for Electron applications.                         |
 
@@ -183,17 +182,14 @@ Here is a list of the npm packages in this repository:
  | Folder Name                                            | Package Name                       | Purpose                                                                      |
  | :----------------------------------------------------- | :--------------------------------- | :--------------------------------------------------------------------------- |
  | [angular](./npm/angular)                               | `@cypress/angular`                   | Cypress component testing for Angular.     |
-  | [angular signals](./npm/angular-signals)                               | `@cypress/angular-signals`                   | Cypress component testing for Angular 17/18 including support for signals.     |
  | [eslint-plugin-dev](./npm/eslint-plugin-dev)           | `@cypress/eslint-plugin-dev`       | Eslint plugin for internal development.          |
  | [grep](./npm/grep)                                       | `@cypress/grep`                     | Filter tests using substring                        |
  | [mount-utils](./npm/mount-utils)                       | `@cypress/mount-utils`             | Common functionality for Vue/React/Angular adapters. |
  | [react](./npm/react)                                   | `@cypress/react`                   | Cypress component testing for React.             |
- | [react18](./npm/react18)                               | `@cypress/react18`                   | Cypress component testing for React 18.           |
  | [schematic](./npm/cypress-schematic)                   | `@cypress/schematic`            | Official Angular Schematic and Builder for the Angular CLI.|
  | [svelte](./npm/svelte)                               | `@cypress/svelte`                   | Cypress component testing for Svelte.           |
  | [vite-dev-server](./npm/vite-dev-server)     | `@cypress/vite-dev-server`    | Vite powered dev server for Component Testing.                  |
  | [vue](./npm/vue)                                       | `@cypress/vue`                     | Cypress component testing for Vue 3.               |
- | [vue2](./npm/vue2)                                       | `@cypress/vue2`                     | Cypress component testing for Vue 2.               |
  | [webpack-batteries-included-preprocessor](./npm/webpack-batteries-included-preprocessor)     | `@cypress/webpack-batteries-included-preprocessor`    | Cypress preprocessor for bundling JavaScript via webpack with dependencies included and support for various ES features, TypeScript, and CoffeeScript.  |
  | [webpack-dev-server](./npm/webpack-dev-server)     | `@cypress/webpack-dev-server`    | Webpack powered dev server for Component Testing.                |
  | [webpack-preprocessor](./npm/webpack-preprocessor)     | `@cypress/webpack-preprocessor`    | Cypress preprocessor for bundling JavaScript via webpack.  |
@@ -205,34 +201,24 @@ We try to tag all issues with a `pkg/` or `npm/` tag describing the appropriate 
 You must have the following installed on your system to contribute locally:
 
 - [`Node.js`](https://nodejs.org/en/) (See the root [.node-version](.node-version) file for the required version. You can find a list of tools on [node-version-usage](https://github.com/shadowspawn/node-version-usage) to switch the version of [`Node.js`](https://nodejs.org/en/) based on [.node-version](.node-version).)
-- [`yarn`](https://yarnpkg.com/en/docs/install)
-- [`python`](https://www.python.org/downloads/) (since we use `node-gyp`. See their [repo](https://github.com/nodejs/node-gyp) for Python version requirements. Use Python `3.11` or lower.)
+- [`Yarn v1 Classic`](https://yarnpkg.com/en/docs/install) (See also [Corepack](#corepack) below.)
+- [`python`](https://www.python.org/downloads/) (since we use `node-gyp`. See their [repo](https://github.com/nodejs/node-gyp) for Python version requirements.)
 
 #### Debian/Ubuntu
 
 `sudo apt install g++ make` meets the additional requirements to run `node-gyp` in the context of building Cypress from source.
 `python` is pre-installed on Debian-based systems including Ubuntu.
-The Python versions shipped with Ubuntu versions `20.04`, `23.10` and `22.04` are compatible with Cypress requirements.
+The Python versions shipped with Ubuntu versions `20.04`, `22.04` and `24.*` are compatible with Cypress requirements.
 
-Only on Ubuntu `24.04` install Python `3.11` by executing the following commands:
-
-```shell
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update
-sudo apt install python3.11
-```
-
-Add the environment variable `NODE_GYP_FORCE_PYTHON` to `~/.bashrc`:
-
-```shell
-export NODE_GYP_FORCE_PYTHON=/usr/bin/python3.11
-```
-
-For Ubuntu `24.04` refer also to the [Release notes](https://discourse.ubuntu.com/t/noble-numbat-release-notes/39890) in the section [Unprivileged user namespace restrictions](https://discourse.ubuntu.com/t/noble-numbat-release-notes/39890#unprivileged-user-namespace-restrictions-15) and apply one of the workarounds to disable unprivileged user namespace restrictions for the entire system, either for one boot or persistently, as described. If you do not do this you may receive an error which includes the text `FATAL:setuid_sandbox_host.cc` when you try to run Cypress on this version of Ubuntu after building Cypress from source.
+For Ubuntu `24.04` and above, refer also to the [Ubuntu 24.04 Release notes](https://discourse.ubuntu.com/t/noble-numbat-release-notes/39890) in the section "Unprivileged user namespace restrictions" and apply one of the workarounds to disable unprivileged user namespace restrictions for the entire system, either for one boot or persistently, as described. If you do not do this you may receive an error which includes the text `FATAL:setuid_sandbox_host.cc` when you try to run Cypress on these versions of Ubuntu after building Cypress from source.
 
 #### Windows
 
-When installing the Visual Studio C++ environment recommended by [node-gyp](https://github.com/nodejs/node-gyp), install also a Windows 10 SDK. The currently used version of `node-gyp` may otherwise fail to recognise the Visual Studio installation.
+Currently no additional instructions for installation requirements.
+
+#### Corepack
+
+The Cypress repo is compatible with Corepack and contains a `packageManager` field in the root [package.json](./package.json) file to automatically install Yarn. Cypress does not however require you to enable Corepack. It is classed as experimental and not suitable for production by the Node.js organization. Refer to the repo [corepack](https://github.com/nodejs/corepack#readme) for instructions, known issues and workarounds.
 
 ### Getting Started
 
@@ -399,30 +385,12 @@ Sometimes tests pass locally, but fail in CI. Our CI environment is dockerized. 
 2. Run the following command from the root of the project:
 
 ```shell
-$ yarn docker
+yarn docker
 ```
 
 There is a script [scripts/run-docker-local.sh](scripts/run-docker-local.sh) that runs the cypress image (see [CircleCI config](.circleci/config.yml) for the current image name).
 
 The image will start and will map the root of the repository to `/cypress` inside the image. Now you can modify the files using your favorite environment and rerun tests inside the docker environment.
-
-#### Docker for built binary
-
-You can also use Docker to simulate and debug the built binary. In a temporary folder (for example from the folder `/tmp/test-folder/`) start a Docker image:
-
-```shell
-$ docker run -it -w /app -v $PWD:/app cypress/base:8 /bin/bash
-```
-
-Point the installation at a specific beta binary and NPM package archive (if needed) and _set local cache folder_ to unzip the downloaded binary into a subfolder.
-
-```shell
-$ export CYPRESS_INSTALL_BINARY=https://cdn.cypress.io/beta/.../cypress.zip
-$ export CYPRESS_CACHE_FOLDER=./cypress-cache
-$ yarn add https://cdn.cypress.io/beta/npm/.../cypress.tgz
-```
-
-Note that unzipping the Linux binary inside a Docker container onto a mapped volume drive is *slow*. But once this is done you can modify the application resource folder in the local folder `/tmp/test-folder/node_modules/cypress/cypress-cache/3.3.0/Cypress/resources/app` to debug issues.
 
 #### Docker as a performance constrained environment
 

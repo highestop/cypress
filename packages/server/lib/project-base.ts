@@ -16,15 +16,23 @@ import * as savedState from './saved_state'
 import { SocketCt } from './socket-ct'
 import { SocketE2E } from './socket-e2e'
 import { ensureProp } from './util/class-helpers'
-
 import system from './util/system'
-import type { BannersState, FoundBrowser, FoundSpec, OpenProjectLaunchOptions, ReceivedCypressOptions, ResolvedConfigurationOptions, TestingType, VideoRecording } from '@packages/types'
+import { BannersState, FoundBrowser, FoundSpec, OpenProjectLaunchOptions, ProtocolManagerShape, ReceivedCypressOptions, ResolvedConfigurationOptions, TestingType, VideoRecording, AutomationCommands, StudioMetricsTypes } from '@packages/types'
 import { DataContext, getCtx } from '@packages/data-context'
 import { createHmac } from 'crypto'
-import type ProtocolManager from './cloud/protocol'
 import { ServerBase } from './server-base'
 import type Protocol from 'devtools-protocol'
 import type { ServiceWorkerClientEvent } from '@packages/proxy/lib/http/util/service-worker-manager'
+import { v4 } from 'uuid'
+import { StudioLifecycleManager } from './cloud/studio/StudioLifecycleManager'
+import { reportStudioError } from './cloud/api/studio/report_studio_error'
+import { CloudRequest } from './cloud/api/cloud_request'
+import { isRetryableError } from './cloud/network/is_retryable_error'
+import { asyncRetry } from './util/async_retry'
+import { getCloudMetadata } from './cloud/get_cloud_metadata'
+import { telemetryManager } from './cloud/studio/telemetry/TelemetryManager'
+import { INITIALIZATION_MARK_NAMES, INITIALIZATION_TELEMETRY_GROUP_NAMES } from './cloud/studio/telemetry/constants/initialization'
+import { TelemetryReporter } from './cloud/studio/telemetry/TelemetryReporter'
 
 export interface Cfg extends ReceivedCypressOptions {
   projectId?: string
@@ -32,7 +40,7 @@ export interface Cfg extends ReceivedCypressOptions {
   proxyServer?: Cypress.RuntimeConfigOptions['proxyUrl']
   fileServerFolder?: Cypress.ResolvedConfigOptions['fileServerFolder']
   testingType: TestingType
-  protocolEnabled?: boolean
+  isDefaultProtocolEnabled?: boolean
   hideCommandLog?: boolean
   hideRunnerUi?: boolean
   exit?: boolean
@@ -63,7 +71,7 @@ export class ProjectBase extends EE {
   protected _cfg?: Cfg
   protected _server?: ServerBase<any>
   protected _automation?: Automation
-  private _protocolManager?: ProtocolManager
+  private _protocolManager?: ProtocolManagerShape
   private _recordTests?: any = null
   private _isServerOpen: boolean = false
 
@@ -151,7 +159,19 @@ export class ProjectBase extends EE {
 
     process.chdir(this.projectRoot)
 
-    this._server = new ServerBase()
+    this._server = new ServerBase(cfg)
+
+    if (!cfg.isTextTerminal) {
+      const studioLifecycleManager = new StudioLifecycleManager()
+
+      studioLifecycleManager.initializeStudioManager({
+        projectId: cfg.projectId,
+        cloudDataSource: this.ctx.cloud,
+        cfg,
+        debugData: this.configDebugData,
+        ctx: this.ctx,
+      })
+    }
 
     const [port, warning] = await this._server.open(cfg, {
       getCurrentBrowser: () => this.browser,
@@ -239,6 +259,13 @@ export class ProjectBase extends EE {
 
   reset () {
     debug('resetting project instance %s', this.projectRoot)
+
+    // if we're in studio mode, we need to close the protocol manager
+    // to ensure the config is initialized properly on browser relaunch
+    if (this.ctx.coreData.studioLifecycleManager) {
+      this.protocolManager?.close()
+      this.protocolManager = undefined
+    }
 
     this.spec = null
     this.browser = null
@@ -328,8 +355,10 @@ export class ProjectBase extends EE {
       await this.server.addBrowserPreRequest(browserPreRequest)
     }
 
-    const onRequestEvent = (eventName, data) => {
+    const onRequestEvent = <T extends keyof AutomationCommands>(eventName: T, data: AutomationCommands[T]['dataType']): Promise<AutomationCommands[T]['returnType']> => {
       this.server.emitRequestEvent(eventName, data)
+
+      return Promise.resolve()
     }
 
     const onRemoveBrowserPreRequest = (requestId: string) => {
@@ -376,6 +405,144 @@ export class ProjectBase extends EE {
       onSpecChanged: options.onSpecChanged,
       onSavedStateChanged: (state: any) => this.saveState(state),
       closeExtraTargets: this.closeExtraTargets,
+
+      onStudioInit: async () => {
+        telemetryManager.mark(INITIALIZATION_MARK_NAMES.INITIALIZATION_START)
+
+        const endTelemetry = ({ status, canAccessStudioAI }: { status: string, canAccessStudioAI: boolean }) => {
+          telemetryManager.mark(INITIALIZATION_MARK_NAMES.INITIALIZATION_END)
+
+          TelemetryReporter.getInstance().reportTelemetry(INITIALIZATION_TELEMETRY_GROUP_NAMES.INITIALIZE_STUDIO, {
+            status,
+            canAccessStudioAI,
+          })
+        }
+
+        const cloudStudioSessionId = v4()
+
+        try {
+          const isStudioReady = this.ctx.coreData.studioLifecycleManager?.isStudioReady()
+
+          if (!isStudioReady) {
+            debug('User entered studio mode before cloud studio was initialized')
+            const { cloudUrl, cloudHeaders } = await getCloudMetadata(this.ctx.cloud)
+
+            reportStudioError({
+              cloudApi: {
+                cloudUrl,
+                cloudHeaders,
+                CloudRequest,
+                isRetryableError,
+                asyncRetry,
+              },
+              studioHash: this.id,
+              projectSlug: this.cfg.projectId,
+              error: new Error('User entered studio before cloud studio was initialized'),
+              studioMethod: 'onStudioInit',
+              studioMethodArgs: [],
+            })
+
+            endTelemetry({ status: 'studio-not-ready', canAccessStudioAI: false })
+
+            return { canAccessStudioAI: false, cloudStudioSessionId }
+          }
+
+          const studio = await this.ctx.coreData.studioLifecycleManager?.getStudio()
+
+          // only capture studio started event if the user is accessing legacy studio
+          if (!this.ctx.coreData.studioLifecycleManager?.cloudStudioRequested) {
+            try {
+              studio?.captureStudioEvent({
+                type: StudioMetricsTypes.STUDIO_STARTED,
+                machineId: await this.ctx.coreData.machineId,
+                projectId: this.cfg.projectId,
+                browser: this.browser ? {
+                  name: this.browser.name,
+                  family: this.browser.family,
+                  channel: this.browser.channel,
+                  version: this.browser.version,
+                } : undefined,
+                cypressVersion: pkg.version,
+              })
+            } catch (error) {
+              debug('Error capturing studio event:', error)
+            }
+          }
+
+          if (this.spec && studio?.protocolManager) {
+            telemetryManager.mark(INITIALIZATION_MARK_NAMES.CAN_ACCESS_STUDIO_AI_START)
+            const canAccessStudioAI = await studio?.canAccessStudioAI(this.browser) ?? false
+
+            telemetryManager.mark(INITIALIZATION_MARK_NAMES.CAN_ACCESS_STUDIO_AI_END)
+
+            if (!canAccessStudioAI) {
+              endTelemetry({ status: 'success', canAccessStudioAI })
+
+              return { canAccessStudioAI, cloudStudioSessionId }
+            }
+
+            this.protocolManager = studio.protocolManager
+            this.protocolManager.setupProtocol()
+            this.protocolManager.beforeSpec({
+              ...this.spec,
+              instanceId: v4(),
+            })
+
+            telemetryManager.mark(INITIALIZATION_MARK_NAMES.CONNECT_PROTOCOL_TO_BROWSER_START)
+            await browsers.connectProtocolToBrowser({ browser: this.browser, foundBrowsers: this.options.browsers, protocolManager: studio.protocolManager })
+            telemetryManager.mark(INITIALIZATION_MARK_NAMES.CONNECT_PROTOCOL_TO_BROWSER_END)
+
+            if (!studio.protocolManager.dbPath) {
+              debug('Protocol database path is not set after initializing protocol manager')
+
+              endTelemetry({ status: 'protocol-db-path-not-set', canAccessStudioAI: false })
+
+              return { canAccessStudioAI: false, cloudStudioSessionId }
+            }
+
+            telemetryManager.mark(INITIALIZATION_MARK_NAMES.INITIALIZE_STUDIO_AI_START)
+            await studio.initializeStudioAI({
+              protocolDbPath: studio.protocolManager.dbPath,
+            })
+
+            telemetryManager.mark(INITIALIZATION_MARK_NAMES.INITIALIZE_STUDIO_AI_END)
+
+            endTelemetry({ status: 'success', canAccessStudioAI: true })
+
+            return { canAccessStudioAI: true, cloudStudioSessionId }
+          }
+
+          this.protocolManager = undefined
+
+          endTelemetry({ status: 'success', canAccessStudioAI: false })
+
+          return { canAccessStudioAI: false, cloudStudioSessionId }
+        } catch (error) {
+          endTelemetry({ status: 'exception', canAccessStudioAI: false })
+
+          return { canAccessStudioAI: false, cloudStudioSessionId }
+        }
+      },
+
+      onStudioDestroy: async () => {
+        const isStudioReady = await this.ctx.coreData.studioLifecycleManager?.isStudioReady()
+
+        if (!isStudioReady) {
+          debug('Studio is not ready - skipping destroy')
+
+          return
+        }
+
+        const studio = await this.ctx.coreData.studioLifecycleManager?.getStudio()
+
+        await studio?.destroy()
+
+        if (this.protocolManager) {
+          await browsers.closeProtocolConnection({ browser: this.browser, foundBrowsers: this.options.browsers })
+          this.protocolManager?.close()
+          this.protocolManager = undefined
+        }
+      },
 
       onCaptureVideoFrames: (data: any) => {
         // TODO: move this to browser automation middleware
@@ -474,16 +641,16 @@ export class ProjectBase extends EE {
 
     if (this.browser.family !== 'chromium') {
       // If we're not in chromium, our strategy for correlating service worker prerequests doesn't work in non-chromium browsers (https://github.com/cypress-io/cypress/issues/28079)
-      // in order to not hang for 2 seconds, we override the prerequest timeout to be 500 ms (which is what it has been historically)
+      // in order to not hang for 2 seconds, we override the prerequest timeout to be 500 ms (which is what it has been historically).
       this._server?.setPreRequestTimeout(500)
     }
   }
 
-  get protocolManager (): ProtocolManager | undefined {
+  get protocolManager (): ProtocolManagerShape | undefined {
     return this._protocolManager
   }
 
-  set protocolManager (protocolManager: ProtocolManager | undefined) {
+  set protocolManager (protocolManager: ProtocolManagerShape | undefined) {
     this._protocolManager = protocolManager
 
     this._server?.setProtocolManager(protocolManager)
@@ -523,10 +690,12 @@ export class ProjectBase extends EE {
 
     debug('project has config %o', this._cfg)
 
-    const protocolEnabled = this._protocolManager?.protocolEnabled ?? false
+    const isDefaultProtocolEnabled = this._protocolManager?.isProtocolEnabled ?? false
 
-    // hide the runner if explicitly requested or if the protocol is enabled and the runner is not explicitly enabled
-    const hideRunnerUi = this.options?.args?.runnerUi === false || (protocolEnabled && !this.options?.args?.runnerUi)
+    const hideRunnerUi = (
+      this.options?.args?.runnerUi === false ||
+      (isDefaultProtocolEnabled && this._cfg.isTextTerminal && !this.options?.args?.runnerUi)
+    )
 
     // hide the command log if explicitly requested or if we are hiding the runner
     const hideCommandLog = this._cfg.env?.NO_COMMAND_LOG === 1 || hideRunnerUi
@@ -537,7 +706,7 @@ export class ProjectBase extends EE {
       browser: this.browser,
       testingType: this.ctx.coreData.currentTestingType ?? 'e2e',
       specs: [],
-      protocolEnabled,
+      isDefaultProtocolEnabled,
       hideCommandLog,
       hideRunnerUi,
     }
@@ -576,6 +745,10 @@ export class ProjectBase extends EE {
   // These methods are not related to start server/sockets/runners
   async getProjectId () {
     return getCtx().lifecycleManager.getProjectId()
+  }
+
+  get configDebugData () {
+    return this.ctx.lifecycleManager.configDebugData
   }
 
   // For testing

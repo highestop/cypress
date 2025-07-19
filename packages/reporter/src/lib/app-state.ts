@@ -1,5 +1,5 @@
 import _ from 'lodash'
-import { observable } from 'mobx'
+import { observable, makeObservable } from 'mobx'
 
 interface DefaultAppState {
   isPaused: boolean
@@ -22,19 +22,33 @@ const defaults: DefaultAppState = {
 }
 
 class AppState {
-  @observable autoScrollingUserPref = true
-  @observable autoScrollingEnabled = true
-  @observable isSpecsListOpen = false
-  @observable isPaused = defaults.isPaused
-  @observable isRunning = defaults.isRunning
-  @observable isPreferencesMenuOpen = defaults.isPreferencesMenuOpen
-  @observable nextCommandName = defaults.nextCommandName
-  @observable pinnedSnapshotId = defaults.pinnedSnapshotId
-  @observable studioActive = defaults.studioActive
+  autoScrollingUserPref = true
+  autoScrollingEnabled = true
+  isSpecsListOpen = false
+  isPaused = defaults.isPaused
+  isRunning = defaults.isRunning
+  isPreferencesMenuOpen = defaults.isPreferencesMenuOpen
+  nextCommandName = defaults.nextCommandName
+  pinnedSnapshotId = defaults.pinnedSnapshotId
+  studioActive = defaults.studioActive
 
   isStopped = false
   _resetAutoScrollingEnabledTo = true;
   [key: string]: any
+
+  constructor () {
+    makeObservable(this, {
+      autoScrollingUserPref: observable,
+      autoScrollingEnabled: observable,
+      isSpecsListOpen: observable,
+      isPaused: observable,
+      isRunning: observable,
+      isPreferencesMenuOpen: observable,
+      nextCommandName: observable,
+      pinnedSnapshotId: observable,
+      studioActive: observable,
+    })
+  }
 
   startRunning () {
     this.isRunning = true

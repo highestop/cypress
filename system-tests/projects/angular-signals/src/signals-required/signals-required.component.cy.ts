@@ -1,6 +1,6 @@
 import { signal, computed } from '@angular/core'
 import { SignalsRequiredComponent } from './signals-required.component'
-import { createOutputSpy } from 'cypress/angular-signals'
+import { createOutputSpy } from 'cypress/angular'
 
 // NOTE: if this is the only test in your test suite, this error will continually throw until the fixture is closed.
 it('errors on required props missing', (done) => {
@@ -70,6 +70,24 @@ it('can assert on the signal itself', () => {
 
   cy.get('[data-cy="signals-required-component-count-display"]').should('contain.text', '1').then(() => {
     expect(countSignal()).to.equal(1)
+  })
+})
+
+it('ensure mount is reference safe - test for https://github.com/cypress-io/cypress/issues/31983', () => {
+  const titleSignal = signal('Signals Required Component')
+  const countSignal = signal(0)
+
+  cy.mount(SignalsRequiredComponent, {
+    componentProperties: {
+      title: titleSignal,
+      count: countSignal,
+    },
+  }).then(({ component }) => {
+    expect(component.title).to.not.equal(titleSignal)
+    expect(component.title()).to.equal('Signals Required Component')
+
+    expect(component.count).to.not.equal(countSignal)
+    expect(component.count()).to.equal(0)
   })
 })
 
